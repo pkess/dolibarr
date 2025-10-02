@@ -445,6 +445,8 @@ if (!is_array($x_coll) || !is_array($x_paye)) {
 	$hookmanager->initHooks(array('externalbalance'));
 	$reshook = $hookmanager->executeHooks('addVatLine', $parameters, $object, $action); // Note that $action and $object may have been modified by some hooks
 
+	$subtot_coll_total_sum_ht = 0;
+	$subtot_coll_sum_vat = 0;
 	foreach (array_keys($x_coll) as $rate) {
 		$subtot_coll_total_ht = 0;
 		$subtot_coll_vat = 0;
@@ -649,6 +651,8 @@ if (!is_array($x_coll) || !is_array($x_paye)) {
 		print '<td class="right"><span class="amount">' . price(price2num($subtot_coll_total_ht, 'MT')) . '</span></td>';
 		print '<td class="nowrap right"><span class="amount">' . price(price2num($subtot_coll_vat, 'MT')) . '</span></td>';
 		print '</tr>';
+		$subtot_coll_total_sum_ht += $subtot_coll_total_ht;
+		$subtot_coll_sum_vat += $subtot_coll_vat;
 	}
 
 	if (count($x_coll) == 0) {   // Show a total line if nothing shown
@@ -663,6 +667,21 @@ if (!is_array($x_coll) || !is_array($x_paye)) {
 		print '<td class="nowrap right">' . price(price2num(0, 'MT')) . '</td>';
 		print '</tr>';
 	}
+
+	// Blank line
+	print '<tr><td colspan="' . ($span + 2) . '">&nbsp;</td></tr>';
+
+	// Total customers
+	print '<tr class="liste_total">';
+	print '<td colspan="4"></td>';
+	print '<td class="right">' . $langs->trans("Total") . ':</td>';
+	if ($modetax != 1) {
+		print '<td class="nowrap right">&nbsp;</td>';
+		print '<td class="right">&nbsp;</td>';
+	}
+	print '<td class="right"><span class="amount">' . price(price2num($subtot_coll_total_sum_ht, 'MT')) . '</span></td>';
+	print '<td class="nowrap right"><span class="amount">' . price(price2num($subtot_coll_sum_vat, 'MT')) . '</span></td>';
+	print '</tr>';
 
 	// Blank line
 	print '<tr><td colspan="' . ($span + 2) . '">&nbsp;</td></tr>';
@@ -686,6 +705,8 @@ if (!is_array($x_coll) || !is_array($x_paye)) {
 	print '<td class="right">' . $vatsup . '</td>';
 	print '</tr>' . "\n";
 
+	$subtot_paye_total_sum_ht = 0;
+	$subtot_paye_sum_vat = 0;
 	foreach (array_keys($x_paye) as $rate) {
 		$subtot_paye_total_ht = 0;
 		$subtot_paye_vat = 0;
@@ -887,6 +908,8 @@ if (!is_array($x_coll) || !is_array($x_paye)) {
 		print '<td class="right"><span class="amount">' . price(price2num($subtot_paye_total_ht, 'MT')) . '</span></td>';
 		print '<td class="nowrap right"><span class="amount">' . price(price2num($subtot_paye_vat, 'MT')) . '</span></td>';
 		print '</tr>';
+		$subtot_paye_total_sum_ht += $subtot_paye_total_ht;
+		$subtot_paye_sum_vat += $subtot_paye_vat;
 	}
 
 	if (count($x_paye) == 0) {  // Show a total line if nothing shown
@@ -901,6 +924,21 @@ if (!is_array($x_coll) || !is_array($x_paye)) {
 		print '<td class="nowrap right"><span class="amount">' . price(price2num(0, 'MT')) . '</span></td>';
 		print '</tr>';
 	}
+
+	// Blank line
+	print '<tr><td colspan="' . ($span + 2) . '">&nbsp;</td></tr>';
+
+	// Total paye
+	print '<tr class="liste_total">';
+	print '<td colspan="4"></td>';
+	print '<td class="right">' . $langs->trans("Total") . ':</td>';
+	if ($modetax != 1) {
+		print '<td class="nowrap right">&nbsp;</td>';
+		print '<td class="right">&nbsp;</td>';
+	}
+	print '<td class="right"><span class="amount">' . price(price2num($subtot_paye_total_sum_ht, 'MT')) . '</span></td>';
+	print '<td class="nowrap right"><span class="amount">' . price(price2num($subtot_paye_sum_vat, 'MT')) . '</span></td>';
+	print '</tr>';
 
 	print '</table>';
 	print '</div>';
