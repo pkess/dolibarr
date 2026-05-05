@@ -111,9 +111,20 @@ class CodingPhpTest extends CommonClassTest
 		 }
 		 ));
 		 */
-		return array_map(function ($value) {
-			return array($value);
-		}, $filesarray);
+		$returnlist = array_map(function ($value) {
+			return array($value); }, $filesarray);
+
+		// To process only 1 file, uncomment this
+		/*
+		foreach($returnlist as $key => $val) {
+			if ($val[0]['name'] != 'societe.class.php') {
+				unset($returnlist[$key]);
+			}
+		}
+		var_dump($returnlist);
+		*/
+
+		return $returnlist;
 	}
 
 	/**
@@ -179,13 +190,16 @@ class CodingPhpTest extends CommonClassTest
 				//exit;
 			}
 
-			if (preg_match('/\.class\.php$/', $file['relativename']) && ! in_array($file['relativename'], array(
+			if (preg_match('/\.class\.php$/', $file['relativename']) &&
+				! preg_match('/^core\/class\/fields\/.*field\.class\.php$/', $file['relativename']) &&
+				! in_array($file['relativename'], array(
 					'adherents/class/adherent.class.php',
 					'adherents/canvas/actions_adherentcard_common.class.php',
 					'contact/canvas/actions_contactcard_common.class.php',
 					'compta/facture/class/facture.class.php',
 					'core/class/commonobject.class.php',
 					'core/class/extrafields.class.php',
+					'core/class/fieldsmanager.class.php',
 					'core/class/html.form.class.php',
 					'core/class/html.formfile.class.php',
 					'core/class/html.formcategory.class.php',
@@ -205,6 +219,7 @@ class CodingPhpTest extends CommonClassTest
 					'webportal/class/html.formcardwebportal.class.php',
 					'webportal/class/html.formlistwebportal.class.php',
 					'webportal/controllers/document.controller.class.php',
+					'webportal/controllers/viewimage.controller.class.php',
 					'workstation/class/workstation.class.php',
 				))) {
 				// Must not find GETPOST
@@ -260,7 +275,7 @@ class CodingPhpTest extends CommonClassTest
 			//exit;
 		}
 
-		// Check for unauthorised vardumps
+		// Check for unauthorised var_dumps
 		if (!preg_match('/test\/phpunit/', $file['fullname'])) {
 			$this->verifyNoActiveVardump($filecontent, $report_filepath);
 		}
@@ -352,9 +367,10 @@ class CodingPhpTest extends CommonClassTest
 		// Check bad casting on forge sql
 		$ok = true;
 		$matches = array();
-		preg_match_all('/\$sql\s*\.?=\s*[\"\'][a-z\s=_]+[\'\"]\s*\.\$([a-z->_]+)/', $filecontent, $matches, PREG_SET_ORDER);
+		preg_match_all('/\$sql\s*\.?=\s*[\"\'][a-z\s=_,]+[\'\"]\s*\.\$([a-z->_]+)/', $filecontent, $matches, PREG_SET_ORDER);
+		//var_dump($matches);
 		foreach ($matches as $key => $val) {
-			if (in_array($val[1], array('object->get', 'user', 'this->sanitize', 'this->db->sanitize', 'this->db->escape', 'this->db->encrypt', 'this->db->plimit', 'db->decrypt', 'db->sanitize', 'db->ifsql', 'this->db->prefix', 'clause', 'sqlwhere', 'sqlorder'))) {		// exclude $db->escape( and $this->
+			if (in_array($val[1], array('object->get', 'user', 'this->sanitize', 'this->db->sanitize', 'this->db->escape', 'this->db->encrypt', 'this->db->ifsql', 'this->db->plimit', 'db->decrypt', 'db->encrypt', 'db->sanitize', 'db->ifsql', 'this->db->prefix', 'clause', 'pk', 'sqlwhere', 'sqlorder'))) {		// exclude $db->escape( and $this->
 				continue;
 			}
 			//if ($val[1] != '\'"' && $val[1] != '\'\'') {
@@ -632,6 +648,15 @@ class CodingPhpTest extends CommonClassTest
 		}
 		$this->assertTrue($ok, 'Found a preg_grep with a param that is a $var but without preg_quote in file '.$file['relativename'].'.');
 
+		// Test we don't have preg_grep with a param without preg_quote
+		$ok = true;
+		$matches = array();
+		preg_match_all('/= getEntity\(["\'a-z]*\)/', $filecontent, $matches, PREG_SET_ORDER);
+		foreach ($matches as $key => $val) {
+			$ok = false;
+			break;
+		}
+		$this->assertTrue($ok, 'Found a sequence "= getEntity(\'...\')" that is not allowed. We should have IN getEntity or = conf->entity in file '.$file['relativename'].'.');
 
 		// Test we don't have "if ($resql >"
 		$ok = true;

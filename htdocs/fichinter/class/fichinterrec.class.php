@@ -325,7 +325,7 @@ class FichinterRec extends Fichinter
 				$this->fk_contrat = $obj->fk_contrat;
 				$this->note_private = $obj->note_private;
 				$this->note_public = $obj->note_public;
-				$this->user_author = $obj->fk_user_author;
+				$this->user_author_id = $obj->fk_user_author;
 				$this->model_pdf = empty($obj->model_pdf) ? "" : $obj->model_pdf;
 				$this->rang = !empty($obj->rang) ? $obj->rang : "";
 				$this->special_code = !empty($obj->special_code) ? $obj->special_code : "";
@@ -568,11 +568,11 @@ class FichinterRec extends Fichinter
 			$sql .= ", ".(!empty($label) ? "'".$this->db->escape($label)."'" : "null");
 			$sql .= ", ".(!empty($desc) ? "'".$this->db->escape($desc)."'" : "null");
 			$sql .= ", ".(!empty($date) ? "'".$this->db->idate($date)."'" : "null");
-			$sql .= ", ".$duration;
+			$sql .= ", ".((int) $duration);
 			//$sql.= ", ".(!empty($qty)? $qty :(!empty($duration)? $duration :"null"));
 			//$sql.= ", ".price2num($txtva);
 			$sql .= ", ".(!empty($fk_product) ? $fk_product : "null");
-			$sql .= ", ".$product_type;
+			$sql .= ", ".((int) $product_type);
 			$sql .= ", ".(!empty($remise_percent) ? $remise_percent : "null");
 			$sql .= ", '".price2num($pu_ht)."'";
 			$sql .= ", '".price2num($total_ht)."'";

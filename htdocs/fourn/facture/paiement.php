@@ -562,9 +562,18 @@ if ($action == 'create' || $action == 'confirm_paiement' || $action == 'add_paie
 				$sql .= ' SUM(pf.amount) as am, SUM(pf.multicurrency_amount) as multicurrency_am';
 				$sql .= ' FROM '.MAIN_DB_PREFIX.'facture_fourn as f';
 				$sql .= ' LEFT JOIN '.MAIN_DB_PREFIX.'paiementfourn_facturefourn as pf ON pf.fk_facturefourn = f.rowid';
-				$sql .= " WHERE f.entity = ".((int) $conf->entity);
-				$sql .= ' AND f.fk_soc = '.((int) $object->socid);
-				$sql .= ' AND f.paye = 0';
+				$sql .= ' WHERE f.entity = '.((int) $conf->entity);
+				$sql .= ' AND (f.fk_soc = '.((int) $object->socid);
+				$aux = $object->fetch_thirdparty();
+				// Can pay invoices of all child of parent company
+				if (getDolGlobalString('FACTURE_PAYMENTS_ON_DIFFERENT_THIRDPARTIES_BILLS') && !empty($object->thirdparty->parent)) {
+					$sql .= ' OR f.fk_soc IN (SELECT rowid FROM '.MAIN_DB_PREFIX.'societe WHERE parent = '.((int) $object->thirdparty->parent).')';
+				}
+				// Can pay invoices of all child of myself
+				if (getDolGlobalString('FACTURE_PAYMENTS_ON_SUBSIDIARY_COMPANIES')) {
+					$sql .= ' OR f.fk_soc IN (SELECT rowid FROM '.MAIN_DB_PREFIX.'societe WHERE parent = '.((int) $object->thirdparty->id).')';
+				}
+				$sql .= ') AND f.paye = 0';
 				$sql .= ' AND f.fk_statut = 1'; // Status=0 => unvalidated, Status=2 => canceled
 
 				if (!$displayAllInvoices) {
@@ -629,18 +638,20 @@ if ($action == 'create' || $action == 'confirm_paiement' || $action == 'add_paie
 						print '<thead>';
 						print '<tr class="liste_titre">';
 						print '<th>'.$langs->trans('Invoice').'</th>';
-						print '<th>'.$langs->trans('RefSupplier').'</th>';
+						//print '<th>'.$langs->trans('RefSupplier').'</th>';
 						if ($displayAllInvoices) {
 							print '<th class="center">' . $langs->trans('Type') . '</th>';
 						}
 						print '<th class="center">'.$langs->trans('Date').'</th>';
 						print '<th class="center">'.$langs->trans('DateMaxPayment').'</th>';
 						if (isModEnabled("multicurrency")) {
+							$langs->load("multicurrency");
+							$labeltoshow = '<span class="small nowraponall">'.$langs->trans("MulticurrencyOriginalCurrency").'</span>';
 							print '<th>'.$langs->trans('Currency').'</th>';
-							print '<th class="right">'.$langs->trans('MulticurrencyAmountTTC').'</th>';
-							print '<th class="right">'.$langs->trans('MulticurrencyAlreadyPaid').'</th>';
-							print '<th class="right">'.$langs->trans('MulticurrencyRemainderToPay').'</th>';
-							print '<th class="center">'.$langs->trans('MulticurrencyPaymentAmount').'</th>';
+							print '<th class="right">'.$langs->trans('AmountTTC').' <span class="opacitymedium">('.$labeltoshow.')</span></th>';
+							print '<th class="right">'.$langs->trans('AlreadyPaid').' <span class="opacitymedium">('.$labeltoshow.')</span></th>';
+							print '<th class="right">'.$langs->trans('RemainderToPay').' <span class="opacitymedium">('.$labeltoshow.')</span></th>';
+							print '<th class="center">'.$langs->trans('PaymentAmount').' <span class="opacitymedium">('.$labeltoshow.')</span></th>';
 						}
 						print '<th class="right">'.$langs->trans('AmountTTC').'</th>';
 						print '<th class="right">'.$langs->trans('AlreadyPaid').'</th>';
@@ -648,6 +659,7 @@ if ($action == 'create' || $action == 'confirm_paiement' || $action == 'add_paie
 						print '<th class="center">'.$langs->trans('PaymentAmount').'</th>';
 						print '</tr>';
 						print '</thead>';
+
 						print '<tbody>';
 						$total = 0;
 						$total_ttc = 0;
@@ -691,11 +703,16 @@ if ($action == 'create' || $action == 'confirm_paiement' || $action == 'add_paie
 
 							// Ref
 							print '<td data-col="object-name" class="nowraponall">';
+							print '<div class="inline-block lineheightsmall">';
 							print $invoicesupplierstatic->getNomUrl(1);
+							print '<br><span class="opacitymedium small" title="'.$langs->trans("RefSupplier").'">';
+							print dolPrintHTML($objp->ref_supplier);
+							print '</span>';
+							print '</div>';
 							print '</td>';
 
 							// Ref supplier
-							print '<td data-col="ref-supplier" >'.$objp->ref_supplier.'</td>';
+							//print '<td data-col="ref-supplier" >'.$objp->ref_supplier.'</td>';
 
 							// type
 							if ($displayAllInvoices) {
@@ -777,7 +794,9 @@ if ($action == 'create' || $action == 'confirm_paiement' || $action == 'add_paie
 								if ($objp->multicurrency_code && $objp->multicurrency_code != $conf->currency) {
 									if ($action != 'add_paiement') {
 										if (!empty($conf->use_javascript_ajax)) {
-											print '<button class="btn-low-emphasis --btn-icon AutoFillAmount" data-rowname="'.$namef.'" data-value="'.($sign * (float) $multicurrency_remaintopay).'">'.img_picto("Auto fill", 'rightarrow');
+											print '<button class="btn-low-emphasis --btn-icon AutoFillAmount" data-rowname="'.$namef.'" data-value="'.($sign * (float) $multicurrency_remaintopay).'">';
+											print img_picto("Auto fill", 'rightarrow.png');
+											print '</button>';
 										}
 										print '<input type=hidden class="multicurrency_remain" name="'.$nameRemain.'" value="'.$multicurrency_remaintopay.'">';
 										print '<input '.$min.' '.$max.' type="text" class="multicurrency_amount width100" name="'.$namef.'" value="'.GETPOST($namef).'">';
@@ -843,7 +862,9 @@ if ($action == 'create' || $action == 'confirm_paiement' || $action == 'add_paie
 
 							if ($action != 'add_paiement') {
 								if (!empty($conf->use_javascript_ajax)) {
-									print '<button  class="btn-low-emphasis --btn-icon AutoFillAmount" data-rowname="'.$namef.'" data-value="'.($sign * (float) $remaintopay).'">'.img_picto("Auto fill", 'rightarrow').'</button>';
+									print '<button  class="btn-low-emphasis --btn-icon AutoFillAmount" data-rowname="'.$namef.'" data-value="'.($sign * (float) $remaintopay).'">';
+									print img_picto("Auto fill", 'rightarrow.png');
+									print '</button>';
 								}
 								print '<input type="hidden" class="remain" name="'.$nameRemain.'" value="'.$remaintopay.'">';
 								print '<input '.$max.' '.$min.' type="text" class="amount width100" name="'.$namef.'" value="'.dol_escape_htmltag(GETPOST($namef)).'">'; // class is required to be used by javascript callForResult();
@@ -861,20 +882,21 @@ if ($action == 'create' || $action == 'confirm_paiement' || $action == 'add_paie
 							$totalrecudeposits += $deposits;
 							$i++;
 						}
-						print '</tbody>';
+						//print '</tbody>';
 
 						if ($i > 1) {
-							print '<tfoot>';
+							//print '<tfoot>';
+
 							// Print total
 							print '<tr class="liste_total">';
-							$colspan = 4;
+							$colspan = 3;
 
 							// type
 							if ($displayAllInvoices) {
 								$colspan++;
 							}
 
-							print '<td colspan="'.$colspan.'" class="left">'.$langs->trans('TotalTTC').':</td>';
+							print '<td colspan="'.$colspan.'" class="left" scope="row">'.$langs->trans('TotalTTC').':</td>';
 							if (isModEnabled("multicurrency")) {
 								print '<td>&nbsp;</td>';
 								print '<td>&nbsp;</td>';
@@ -894,8 +916,10 @@ if ($action == 'create' || $action == 'confirm_paiement' || $action == 'add_paie
 							print '<td class="right"><b>'.price((float) price2num($total_ttc - $totalrecu - $totalrecucreditnote - $totalrecudeposits, 'MT')).'</b></td>';
 							print '<td class="center" id="result" style="font-weight: bold;"></td>'; // Autofilled
 							print "</tr>\n";
-							print '</tfoot>';
+							//print '</tfoot>';
 						}
+						print '</tbody>';
+
 						print "</table>\n";
 
 						print "</div>";
@@ -909,7 +933,7 @@ if ($action == 'create' || $action == 'confirm_paiement' || $action == 'add_paie
 			// Save + Cancel Buttons
 			if ($action != 'add_paiement') {
 				print '<br><div class="center">';
-				print '<input type="checkbox" checked id="closepaidinvoices" name="closepaidinvoices"> <label for="closepaidinvoices">'.$langs->trans("ClosePaidInvoicesAutomatically").'</label><br>';
+				print '<input type="checkbox" checked id="closepaidinvoices" name="closepaidinvoices" class="marginrightonly"><label for="closepaidinvoices" class="opacitymedium">'.$langs->trans("ClosePaidInvoicesAutomatically").'</label><br>';
 				print '<input type="submit" class="button" value="'.$langs->trans('ToMakePayment').'">';
 				print ' &nbsp; <input type="submit" class="button button-cancel" name="cancel" value="'.$langs->trans("Cancel").'">';
 				print '</div>';

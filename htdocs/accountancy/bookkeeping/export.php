@@ -1,7 +1,7 @@
 <?php
 /* Copyright (C) 2013-2016  Olivier Geffroy         <jeff@jeffinfo.com>
  * Copyright (C) 2013-2016  Florian Henry           <florian.henry@open-concept.pro>
- * Copyright (C) 2013-2025  Alexandre Spangaro      <alexandre@inovea-conseil.com>
+ * Copyright (C) 2013-2026  Alexandre Spangaro      <alexandre@inovea-conseil.com>
  * Copyright (C) 2022       Lionel Vessiller        <lvessiller@open-dsi.fr>
  * Copyright (C) 2016-2017  Laurent Destailleur     <eldy@users.sourceforge.net>
  * Copyright (C) 2018-2025  Frédéric France         <frederic.france@free.fr>
@@ -30,6 +30,13 @@
 
 // Load Dolibarr environment
 require '../../main.inc.php';
+/**
+ * @var Conf $conf
+ * @var DoliDB $db
+ * @var HookManager $hookmanager
+ * @var Translate $langs
+ * @var User $user
+ */
 require_once DOL_DOCUMENT_ROOT.'/accountancy/class/accountancyexport.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/accounting.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/accountancy/class/lettering.class.php';
@@ -41,21 +48,13 @@ require_once DOL_DOCUMENT_ROOT.'/core/class/html.formaccounting.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/date.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/admin.lib.php';
 
-/**
- * @var Conf $conf
- * @var DoliDB $db
- * @var HookManager $hookmanager
- * @var Translate $langs
- * @var User $user
- */
-
 // Load translation files required by the page
 $langs->loadLangs(array("accountancy", "compta"));
 
 $action = GETPOST('action', 'aZ09');
 $massaction = GETPOST('massaction', 'alpha');
 $confirm = GETPOST('confirm', 'alpha');
-$toselect = GETPOST('toselect', 'array');
+$toselect = GETPOST('toselect', 'array:int');
 $contextpage = GETPOST('contextpage', 'aZ') ? GETPOST('contextpage', 'aZ') : 'bookkeepinglist';
 
 $socid = GETPOSTINT('socid');
@@ -168,7 +167,7 @@ $hookmanager->initHooks(array('bookkeepingexport'));
 $formaccounting = new FormAccounting($db);
 $form = new Form($db);
 
-if (!in_array($action, array('export_file', 'delmouv', 'delmouvconfirm')) && !GETPOSTISSET('begin') && !GETPOSTISSET('formfilteraction') && GETPOSTINT('page') == '' && !GETPOSTINT('noreset') && $user->hasRight('accounting', 'mouvements', 'export')) {
+if (!in_array($action, array('export_file', 'delmouv', 'delmouvconfirm')) && !GETPOSTISSET('begin') && !GETPOSTISSET('formfilteraction') && GETPOSTINT('page') == 0 && !GETPOSTINT('noreset') && $user->hasRight('accounting', 'mouvements', 'export')) {
 	if (empty($search_date_start) && empty($search_date_end) && !GETPOSTISSET('restore_lastsearch_values') && !GETPOST('search_accountancy_code_start')) {
 		$sql = "SELECT date_start, date_end";
 		$sql .= " FROM ".MAIN_DB_PREFIX."accounting_fiscalyear ";
@@ -244,6 +243,11 @@ if (!$user->hasRight('accounting', 'mouvements', 'lire')) {
 	accessforbidden();
 }
 
+// Permissions
+$permissiontoread = $user->hasRight('accounting', 'mouvements', 'lire');
+$permissiontoadd = $user->hasRight('accounting', 'mouvements', 'creer');
+$permissiontodelete = $user->hasRight('accounting', 'mouvements', 'supprimer');
+$permissiontoexport = $user->hasRight('accounting', 'mouvements', 'export');
 
 /*
  * Actions
@@ -493,9 +497,6 @@ if (empty($reshook)) {
 	// Mass actions
 	$objectclass = 'Bookkeeping';
 	$objectlabel = 'Bookkeeping';
-	$permissiontoread = ($user->hasRight('societe', 'lire') == 1);
-	$permissiontodelete = ($user->hasRight('societe', 'supprimer') == 1);
-	$permissiontoadd = ($user->hasRight('societe', 'creer') == 1);
 	$uploaddir = $conf->societe->dir_output;
 	include DOL_DOCUMENT_ROOT.'/core/actions_massactions.inc.php';
 }
@@ -764,7 +765,7 @@ if (!getDolGlobalInt('MAIN_DISABLE_FULL_SCANLIST')) {
 		dol_print_error($db);
 	}
 
-	if (($page * $limit) > $nbtotalofrecords) {	// if total resultset is smaller then paging size (filtering), goto and load page 0
+	if (($page * $limit) > (int) $nbtotalofrecords) {	// if total resultset is smaller then paging size (filtering), goto and load page 0
 		$page = 0;
 		$offset = 0;
 	}
@@ -847,19 +848,50 @@ if ($action == 'export_file') {
 	}
 
 	// add documents in an archive for some accountancy export format
-	if (getDolGlobalString('ACCOUNTING_EXPORT_MODELCSV') == AccountancyExport::$EXPORT_TYPE_QUADRATUS
-		|| getDolGlobalString('ACCOUNTING_EXPORT_MODELCSV') == AccountancyExport::$EXPORT_TYPE_FEC
-		|| getDolGlobalString('ACCOUNTING_EXPORT_MODELCSV') == AccountancyExport::$EXPORT_TYPE_FEC2
-	) {
-		$form_question['notifiedexportfull'] = array(
-			'name' => 'notifiedexportfull',
-			'type' => 'checkbox',
-			'label' => $langs->trans('NotifiedExportFull'),
-			'value' => 'false',
-		);
+	$exportTypesWithDocs = array(
+		AccountancyExport::$EXPORT_TYPE_QUADRATUS,
+		AccountancyExport::$EXPORT_TYPE_FEC,
+		AccountancyExport::$EXPORT_TYPE_FEC2
+	);
+
+	$except = array();
+	if (getDolGlobalInt('ACCOUNTING_EXPORT_REMOVE_INVOICE_SOURCE_FILE')) {
+		$except[] = $langs->trans('Invoice');
+	}
+	if (getDolGlobalInt('ACCOUNTING_EXPORT_REMOVE_EXPENSEREPORT_SOURCE_FILE')) {
+		$except[] = $langs->trans('ExpenseReport');
+	}
+	if (getDolGlobalInt('ACCOUNTING_EXPORT_REMOVE_SUPPLIERINVOICE_SOURCE_FILE')) {
+		$except[] = $langs->trans('SupplierInvoice');
 	}
 
-	$formconfirm = $form->formconfirm($_SERVER["PHP_SELF"].'?'.$param, $langs->trans("ExportFilteredList").'...', $langs->trans('ConfirmExportFile'), 'export_fileconfirm', $form_question, '', 1, 390, 700);
+	$form_question['notifiedexportfull'] = array(
+		'name' => 'notifiedexportfull',
+		'type' => 'checkbox',
+		'label' => $langs->trans('NotifiedExportFull').(empty($except) ? '' : ' <spanc class="opacitymedium">('.$langs->trans("except").' '.implode(', ', $except).')</span>'),
+		'value' => 'false',
+	);
+
+	$formconfirm = $form->formconfirm($_SERVER["PHP_SELF"].'?'.$param, $langs->trans("ExportFilteredList").'...', $langs->trans('ConfirmExportFile'), 'export_fileconfirm', $form_question, '', 1, 500, 700);
+
+	$formconfirm .= '<script>
+	jQuery(document).ready(function() {
+		const exportTypesWithDocs = ['.implode(',', $exportTypesWithDocs).'];
+		const $formatExport = jQuery("#formatexport");
+
+		function toggleExportFull() {
+			const $checkbox = jQuery("#notifiedexportfull");
+			const show = exportTypesWithDocs.indexOf(parseInt($formatExport.val())) !== -1;
+			$checkbox.closest(".tagtr").toggle(show);
+			if (!show) {
+				$checkbox.prop("checked", false); // remove checked if hidden
+			}
+		}
+
+		$formatExport.on("change", toggleExportFull);
+		toggleExportFull();
+	});
+	</script>';
 }
 
 // Print form confirm
@@ -877,7 +909,7 @@ if ($limit > 0 && $limit != $conf->liste_limit) {
 $arrayofmassactions = array();
 $massactionbutton = $form->selectMassAction($massaction, $arrayofmassactions);
 
-print '<form method="POST" id="searchFormList" action="'.$_SERVER["PHP_SELF"].'">';
+print '<form method="POST" id="searchFormList" action="'.dolBuildUrl($_SERVER["PHP_SELF"]).'">';
 print '<input type="hidden" name="token" value="'.newToken().'">';
 print '<input type="hidden" name="action" value="list">';
 if ($optioncss != '') {
@@ -914,7 +946,7 @@ if (empty($reshook)) {
 	}
 
 	if ($user->hasRight('accounting', 'mouvements', 'export')) {
-		$newcardbutton .= dolGetButtonTitle($buttonLabel, $langs->trans("ExportFilteredList"), 'fa fa-file-export paddingleft', $_SERVER["PHP_SELF"].'?action=export_file&token='.newToken().($param ? '&'.$param : '').'&sortfield='.urlencode($sortfield).'&sortorder='.urlencode($sortorder), '', $user->hasRight('accounting', 'mouvements', 'export'));
+		$newcardbutton .= dolGetButtonTitle($buttonLabel, $langs->trans("ExportFilteredList"), 'fa fa-file-export paddingleft', $_SERVER["PHP_SELF"].'?action=export_file&token='.newToken().($param ? '&'.$param : '').'&sortfield='.urlencode($sortfield).'&sortorder='.urlencode($sortorder), '', $permissiontoexport);
 	}
 }
 
@@ -1046,7 +1078,7 @@ if (!empty($arrayfields['t.credit']['checked'])) {
 	print '<input type="text" class="flat" name="search_credit" size="4" value="'.dol_escape_htmltag($search_credit).'">';
 	print '</td>';
 }
-// Lettering code
+// Matching code
 if (!empty($arrayfields['t.lettering_code']['checked'])) {
 	print '<td class="liste_titre center">';
 	print '<input type="text" size="3" class="flat" name="search_lettering_code" value="'.dol_escape_htmltag($search_lettering_code).'"/>';
@@ -1399,7 +1431,7 @@ while ($i < min($num, $limit)) {
 		$totalarray['val']['totalcredit'] += $line->credit;
 	}
 
-	// Lettering code
+	// Matching code
 	if (!empty($arrayfields['t.lettering_code']['checked'])) {
 		print '<td class="center">'.$line->lettering_code.'</td>';
 		if (!$i) {
