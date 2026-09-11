@@ -293,6 +293,9 @@ class Form
 		if ($typeofdata == 'datetime') {
 			$typeofdata = 'dayhour';
 		}
+		if ($typeofdata == 'date') {
+			$typeofdata = 'day';
+		}
 		$reg = array();
 		if (preg_match('/^(\w+)\((\d+)\)$/', $typeofdata, $reg)) {
 			if ($reg[1] == 'varchar') {
@@ -7155,7 +7158,7 @@ class Form
 					$out .= $label;
 				} else {
 					$langs->load('errors');
-					$out .= $langs->trans('ErrorNotInDictionaryPaymentConditions');
+					$out .= $langs->trans('ErrorNotInDictionaryPaymentConditions', $selected);
 				}
 			} else {
 				$out .= '&nbsp;';

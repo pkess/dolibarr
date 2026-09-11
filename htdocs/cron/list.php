@@ -118,6 +118,9 @@ $fieldstosearchall = array();
 // Definition of array of fields for columns from ->fields
 $tableprefix = 't';
 $arrayfields = array();
+// Add hook to complete $arrayfield
+$parameters = array('arrayfields' => &$arrayfields);
+$reshook = $hookmanager->executeHooks('completeArrayFields', $parameters, $object, $action); // Note that $action and $object may have been modified by hook
 /*
 foreach ($object->fields as $key => $val) {
 	// If $val['visible']==0, then we never show the field
@@ -179,8 +182,9 @@ if (empty($reshook)) {
 	if (GETPOST('button_removefilter_x', 'alpha') || GETPOST('button_removefilter.x', 'alpha') || GETPOST('button_removefilter', 'alpha')) { // All tests are required to be compatible with all browsers
 		$search_label = '';
 		$search_status = -1;
+		$search_module_name = '';
 		$search_lastresult = '';
-		$search_all = '';
+		$search_module_name = '';
 		$toselect = array();
 		$search_array_options = array();
 	}
@@ -247,6 +251,15 @@ if (empty($reshook)) {
 			}
 			if ($search_label) {
 				$param .= '&search_label='.urlencode($search_label);
+			}
+			if ($search_module_name) {
+				$param .= '&search_module_name='.urlencode($search_module_name);
+			}
+			if ($search_lastresult) {
+				$param .= '&search_lastresult='.urlencode($search_lastresult);
+			}
+			if ($mode) {
+				$param .= '&mode='.urlencode($mode);
 			}
 			if ($optioncss != '') {
 				$param .= '&optioncss='.urlencode($optioncss);

@@ -1852,7 +1852,7 @@ function dol_delete_dir_recursive($dir, $count = 0, $nophperrors = 0, $onlysub =
 					if (is_dir(dol_osencode("$dir/$item")) && !is_link(dol_osencode("$dir/$item"))) {
 						$count = dol_delete_dir_recursive("$dir/$item", $count, $nophperrors, 0, $countdeleted, $indexdatabase, $nolog, ($level + 1));
 					} else {
-						chmod(dol_osencode("$dir/$item"), 0755);
+						dolChmod(dol_osencode("$dir/$item"));	// Try to set permission to write on file
 						$result = dol_delete_file("$dir/$item", 1, $nophperrors, 0, null, false, $indexdatabase, $nolog);
 						$count++;
 						if ($result) {
@@ -2160,8 +2160,6 @@ function dol_add_file_process($upload_dir, $allowoverwrite = 0, $updatesessionor
 				$destfile = dol_sanitizeFileName($info['filename'].($info['extension'] != '' ? ('.'.strtolower($info['extension'])) : ''));
 
 				// Check extension is allowed for upload.
-				// Guard against partial upgrades where files.lib.php has been refreshed
-				// but functions.lib.php has not been reloaded with getExecutableContent() yet.
 				$defaultexecutableextensions = function_exists('getExecutableContent') ? implode(',', getExecutableContent()) : 'htm,html,shtml,js,phar,php,php3,php4,php5,phtml,pht,pl,py,cgi,ksh,sh,bash,bat,cmd,wpk,exe';
 				$fileextensionrestriction = getDolGlobalString("MAIN_FILE_EXTENSION_UPLOAD_RESTRICTION", $defaultexecutableextensions);
 				if (!empty($fileextensionrestriction)) {
@@ -3054,7 +3052,7 @@ function dol_most_recent_file($dir, $regexfilter = '', $excludefilter = array('(
  * @param  	User|null	$fuser				User object (forced)
  * @param	string		$refname			Ref of object to check permission for external users (autodetect if not provided by taking the dirname of $original_file) or for hierarchy
  * @param   string  	$mode               Check permission for 'read' or 'write'
- * @return	mixed							Array with access information : 'accessallowed' & 'sqlprotectagainstexternals' & 'original_file' (as a full path name)
+ * @return	mixed							Array with access information : 'accessallowed' & 'sqlprotectagainstexternals' (a SQL to compare the fk_soc with the one of the user) & 'original_file' (as a full path name)
  * @see restrictedArea()
  */
 function dol_check_secure_access_document($modulepart, $original_file, $entity, $fuser = null, $refname = '', $mode = 'read')
@@ -3770,7 +3768,8 @@ function dol_check_secure_access_document($modulepart, $original_file, $entity, 
 			$accessallowed = 1;
 		}
 		if (!isset($_SESSION['email_customer'])) {
-			$sqlprotectagainstexternals = '';
+			// Request to check socid for external users
+			$sqlprotectagainstexternals = "SELECT fk_soc FROM ".MAIN_DB_PREFIX."ticket WHERE ref='".$db->escape($refname)."' AND entity=".((int) $conf->entity);
 		} else {
 			$email_split = explode('@', $_SESSION['email_customer']);
 
@@ -3778,13 +3777,13 @@ function dol_check_secure_access_document($modulepart, $original_file, $entity, 
 			$sqlprotectagainstexternals .= ' LEFT JOIN '.MAIN_DB_PREFIX.'element_contact ec ON ec.element_id = t.rowid';
 			$sqlprotectagainstexternals .= ' LEFT JOIN '.MAIN_DB_PREFIX.'socpeople c ON c.rowid = ec.fk_socpeople';
 			$sqlprotectagainstexternals .= ' LEFT JOIN '.MAIN_DB_PREFIX.'c_type_contact tc ON tc.element = "ticket" AND tc.rowid = ec.fk_c_type_contact';
-			$sqlprotectagainstexternals .= ' WHERE t.ref LIKE "'.$db->sanitize($refname).'"';
+			$sqlprotectagainstexternals .= " WHERE t.ref LIKE '".$db->escape($refname)."'";
 			$sqlprotectagainstexternals .= ' AND (';
 			$sqlprotectagainstexternals .= '   (';
 			$sqlprotectagainstexternals .= '     tc.rowid IS NOT NULL';
-			$sqlprotectagainstexternals .= '     AND c.email = "'.$db->sanitize($email_split[0]).'@'.$db->sanitize($email_split[1]).'"';
+			$sqlprotectagainstexternals .= "     AND c.email = '".$db->escape($email_split[0]).'@'.$db->sanitize($email_split[1])."'";
 			$sqlprotectagainstexternals .= '   )';
-			$sqlprotectagainstexternals .= '   OR t.origin_email = "'.$db->sanitize($email_split[0]).'@'.$db->sanitize($email_split[1]).'"';
+			$sqlprotectagainstexternals .= "   OR t.origin_email = '".$db->escape($email_split[0]).'@'.$db->sanitize($email_split[1])."'";
 			$sqlprotectagainstexternals .= ' )';
 		}
 		$original_file = $conf->ticket->multidir_output[$entity].'/'.$original_file;
@@ -4257,7 +4256,9 @@ function dolDocToText($filetoprocess, $useFullTextIndexation = 'pdftotext', $opt
 		} else {
 			$params = '-htmlmeta';
 		}
-		$cmd = getDolGlobalString('MAIN_SAVE_FILE_CONTENT_AS_TEXT_PDFTOTEXT', 'pdftotext') . " " . $params ." '".escapeshellcmd($filetoprocess)."' - ";
+
+		// MAIN_SAVE_FILE_CONTENT_AS_TEXT_PDFTOTEXT can be for example: "/usr/bin/pdftotext"
+		$cmd = escapeshellcmd(dol_sanitizePathName(getDolGlobalString('MAIN_SAVE_FILE_CONTENT_AS_TEXT_PDFTOTEXT', 'pdftotext'))) . " " . $params ." '".escapeshellcmd($filetoprocess)."' - ";
 		$resultexec = $utils->executeCLI($cmd, $outputfile, 0, null, 1);
 
 		if (empty($resultexec['error'])) {
@@ -4289,7 +4290,8 @@ function dolDocToText($filetoprocess, $useFullTextIndexation = 'pdftotext', $opt
 
 		// We also exclude '/temp/' dir and 'documents/admin/documents'
 		// We make escapement here and call executeCLI without escapement because we don't want to have the '*.log' escaped.
-		$cmd = getDolGlobalString('MAIN_SAVE_FILE_CONTENT_AS_TEXT_DOCLING', 'docling')." --from pdf --to text '".escapeshellcmd($filetoprocess)."'";
+		// MAIN_SAVE_FILE_CONTENT_AS_TEXT_DOCLING can be for example: "/usr/bin/docling"
+		$cmd = escapeshellcmd(dol_sanitizePathName(getDolGlobalString('MAIN_SAVE_FILE_CONTENT_AS_TEXT_DOCLING', 'docling')))." --from pdf --to text '".escapeshellcmd($filetoprocess)."'";
 		$resultexec = $utils->executeCLI($cmd, $outputfile, 0, null, 1);
 
 		if (!$resultexec['error']) {

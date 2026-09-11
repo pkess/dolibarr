@@ -98,6 +98,7 @@ $action    =  GETPOST('action', 'aZ09');
 $cancel    =  GETPOST('cancel', 'alpha');
 $confirm   =  GETPOST('confirm', 'alpha');
 $backtopage = GETPOST('backtopage', 'alpha');
+$backtopageforcancel = GETPOST('backtopageforcancel', 'alpha');
 
 $lineid    =  GETPOSTINT('lineid');
 $contactid =  GETPOSTINT('contactid');
@@ -232,11 +233,11 @@ if (empty($reshook)) {
 				// We clone object to avoid to denaturate loaded object when setting some properties for clone or if createFromClone modifies the object.
 				$objectutil = dol_clone($object, 1);
 
-				$result = $objectutil->createFromClone($user, $socid);
+				$result = $objectutil->createFromClone($user, $socid, (GETPOSTISSET('entity') ? GETPOSTINT('entity') : null));
 				if ($result > 0) {
 					$warningMsgLineList = array();
 					// check all product lines are to sell otherwise add a warning message for each product line is not to sell
-					foreach ($object->lines as $line) {
+					foreach ($objectutil->lines as $line) {
 						if (!is_object($line->product)) {
 							$line->fetch_product();
 						}
@@ -1998,7 +1999,7 @@ if (empty($reshook)) {
 		$fromElementid = GETPOST('fromelementid');
 		$importLines = GETPOST('line_checkbox');
 
-		if (!empty($importLines) && is_array($importLines) && !empty($fromElement) && ctype_alpha($fromElement) && !empty($fromElementid)) {
+		if (!empty($importLines) && is_array($importLines) && !empty($fromElement) && preg_match('/^[a-zA-Z]+$/', $fromElement) && !empty($fromElementid)) {
 			if ($fromElement == 'commande') {
 				dol_include_once('/' . $fromElement . '/class/' . $fromElement . '.class.php');
 				$lineClassName = 'OrderLine';

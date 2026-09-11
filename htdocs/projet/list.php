@@ -315,6 +315,9 @@ if ($contextpage == 'lead') {
 	}
 }
 
+// Add hook to complete $arrayfields
+$parameters = array('arrayfields' => &$arrayfields);
+$reshook = $hookmanager->executeHooks('completeArrayFields', $parameters, $object, $action); // Note that $action and $object may have been modified by hook
 
 $object->fields = dol_sort_array($object->fields, 'position');
 $arrayfields = dol_sort_array($arrayfields, 'position');
@@ -1365,7 +1368,8 @@ $moreforfilter .= img_picto($tmptitle, 'contact', 'class="pictofixedwidth"').$fo
 
 $moreforfilter .= '</div>';
 
-// If the user can view thirdparties other than his'
+// If the user can view thirdparties other than his', we offer the filter assigned to
+// TODO This must be moved on the dedicated column "Assigned to".
 if ($user->hasRight('user', 'user', 'lire')) {
 	$langs->load("commercial");
 	$moreforfilter .= '<div class="divsearchfield">';

@@ -1360,6 +1360,10 @@ function GETPOST($paramname, $check = 'alphanohtml', $method = 0, $filter = null
 		}
 	}
 
+	if ($paramname == 'hashp' && $out == 'shared') {
+		$out = ''; // We refuse to have hashp=shared as a parameter
+	}
+
 	return $out;
 }
 
@@ -9406,6 +9410,50 @@ function dol_string_neverthesehtmltags($stringtoclean, $disallowed_tags = array(
 
 
 /**
+ *  Close the HTML tags left open in a truncated HTML string.
+ *  Truncating HTML on a separator can cut inside a block, and an unclosed tag makes the browser nest
+ *  everything that follows inside it. Only tags really left open are closed, in reverse order.
+ *
+ *  @param	string	$text		HTML string, possibly with unclosed tags
+ *  @return	string				Same string with the missing closing tags appended
+ *  @see dolGetFirstLineOfText()
+ */
+function dolCloseUnclosedHtmlTags($text)
+{
+	if (!is_string($text) || $text === '') {
+		return $text;
+	}
+
+	// Tags that never carry a closing tag
+	$selfclosing = array('br', 'hr', 'img', 'input', 'meta', 'link', 'source', 'col', 'area', 'base', 'embed', 'param', 'track', 'wbr');
+
+	$opened = array();
+	if (preg_match_all('/<\s*(\/?)([a-zA-Z][a-zA-Z0-9]*)[^>]*?(\/?)\s*>/', $text, $matches, PREG_SET_ORDER)) {
+		foreach ($matches as $match) {
+			$tag = strtolower($match[2]);
+			if (in_array($tag, $selfclosing) || !empty($match[3])) {
+				continue;
+			}
+			if (empty($match[1])) {
+				$opened[] = $tag;
+			} else {
+				// Close the most recent matching opened tag, ignore a stray closing tag
+				$idx = array_search($tag, array_reverse($opened, true), true);
+				if ($idx !== false) {
+					unset($opened[$idx]);
+				}
+			}
+		}
+	}
+
+	foreach (array_reverse($opened) as $tag) {
+		$text .= '</'.$tag.'>';
+	}
+
+	return $text;
+}
+
+/**
  * Return first line of text. Cut will depends if content is HTML or not.
  *
  * @param 	string	$text		Input text
@@ -9554,6 +9602,9 @@ function dol_htmlwithnojs($stringtoencode, $nouseofiframesandbox = 0, $check = '
 						$out = '<html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"></head><body><div class="tricktoremove">' . $out . '</div></body></html>';
 						//$out = '<html><head><meta charset="utf-8"></head><body><div class="tricktoremove">'.$out.'</div></body></html>';
 					} else {
+						// String is not a HTML content but pure text so we accept the & char alone. We protect it from being modified by HTML Tidy or XML sanitizers
+						$out = preg_replace('/&(?![a-zA-Z0-9#]+;)/', '__AMPINTEXT__', $out);
+
 						//$out = '<?xml encoding="UTF-8"><html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"></head><body><div class="tricktoremove">'.dol_nl2br($out).'</div></body></html>';
 						$out = '<html><head><meta http-equiv="content-type" content="text/html; charset=utf-8"></head><body><div class="tricktoremove">' . dol_nl2br($out) . '</div></body></html>';
 						//$out = '<html><head><meta charset="utf-8"></head><body><div class="tricktoremove">'.dol_nl2br($out).'</div></body></html>';
@@ -9634,6 +9685,7 @@ function dol_htmlwithnojs($stringtoencode, $nouseofiframesandbox = 0, $check = '
 					//$out = preg_replace('/<\/div>$/', '', $out);
 
 					if (!$outishtml) {		// If $out was not HTML content we made before a dol_nl2br so we must do the opposite operation now
+						$out = str_replace('__AMPINTEXT__', '&', $out);	// Restore & char not entity
 						$out = str_replace('<br>', '', $out);
 					}
 				} catch (Exception $e) {
@@ -9675,8 +9727,12 @@ function dol_htmlwithnojs($stringtoencode, $nouseofiframesandbox = 0, $check = '
 						);
 
 						// Tidy
+						$locale = setlocale(LC_NUMERIC, '0');	// Tidy has a bug and is changing the PHP locale. So we save it to restore it after.
+
 						$tidy = new tidy();
 						$out = $tidy->repairString($out, $config, 'utf8');
+
+						setlocale(LC_NUMERIC, $locale);			// Restore original local
 
 						//print "xxx".$out;exit;
 					}
@@ -13951,6 +14007,10 @@ function dolIsAllowedForPreview($file)
 	if (getDolGlobalString('MAIN_ALLOW_SVG_FILES_AS_IMAGES')) {
 		$mime_preview[] = 'svg+xml';
 	}
+	if (getDolGlobalString('MAIN_ALLOW_XML_FILES_AS_PREVIEW')) {
+		$mime_preview[] = 'xml';
+	}
+
 	//$mime_preview[]='vnd.oasis.opendocument.presentation';
 	//$mime_preview[]='archive';
 	$num_mime = array_search(dol_mimetype($file, '', 1), $mime_preview);
@@ -14608,7 +14668,7 @@ function dolGetStatus($statusLabel = '', $statusLabelShort = '', $html = '', $st
  * @param string    	$id         	Attribute id of action button. Example 'action-delete'. This can be used for full ajax confirm if this code is reused into the ->formconfirm() method.
  * @param bool|int		$userRight  	User action right. True or 1 of ok. Use 0 if user has no permission, it will add the message "No permission" on tooltip (if no other message explicitly provided). Use -1 to have button not allowed without adding the message (because an explicit label is already set).
  * // phpcs:disable
- * @param array{confirm?:array{url?:string,title?:string,content?:string,use_unsecured_unescapedattr?:bool|string[],action-btn-label?:string,cancel-btn-label?:string,modal?:bool},attr?:array<string,mixed>,areDropdownButtons?:bool,backtopage?:string,lang?:string,enabled?:bool,perm?:int<0,1>,label?:string,url?:string,isDropdown?:int<0,1>,isDropDown?:int<0,1>}	$params = [ // Various params for future : recommended rather than adding more function arguments
+ * @param array{confirm?:array{url?:string,title?:string,content?:string,use_unsecured_unescapedattr?:bool|string[],action-btn-label?:string,cancel-btn-label?:string,modal?:bool},attr?:array<string,mixed>,areDropdownButtons?:bool,forceDropdownButtons?:bool,backtopage?:string,lang?:string,enabled?:bool,perm?:int<0,1>,label?:string,url?:string,isDropdown?:int<0,1>,isDropDown?:int<0,1>}	$params = [ // Various params for future : recommended rather than adding more function arguments
  *                                                                                                                                                                                                                                                                                                                                      'attr' => [ // to add or override button attributes
  *                                                                                                                                                                                                                                                                                                                                      	'xxxxx' => '', // your xxxxx attribute you want
  *                                                                                                                                                                                                                                                                                                                                      	'class' => 'reposition', // to add more css class to the button class attribute
@@ -14660,7 +14720,7 @@ function dolGetButtonAction($label, $text = '', $actionType = 'default', $url = 
 			return $out;
 		}
 
-		if (count($url) > 1) {
+		if (count($url) > 1 || !empty($params["forceDropdownButtons"])) {
 			$out .= '<div class="dropdown inline-block dropdown-holder">';
 			$out .= '<a style="margin-right: auto;" class="dropdown-toggle classfortooltip butAction' . ($userRight ? '' : 'Refused') . '" title="' . dol_escape_htmltag($label) . '" data-toggle="dropdown">' . ($text ? $text : $label) . '</a>';
 			$out .= '<div class="dropdown-content">';
@@ -15436,6 +15496,23 @@ function getElementProperties($elementType)
 		$classpath = 'product/class';
 		$subelement = 'product';
 		$table_element = 'product';
+	} elseif ($elementType == 'product_attribute') {
+		$module = 'variants';
+		$element = 'product_attribute';
+		$subelement = 'product_attribute';
+		$classpath = 'variants/class';
+		$classfile = 'ProductAttribute';
+		$classname = 'ProductAttribute';
+		$table_element = 'product_attribute';
+	} elseif ($elementType == 'product_attribute_value') {
+		$module = 'variants';
+		$element = 'product_attribute_value';
+		$subelement = 'product_attribute_value';
+		$classpath = 'variants/class';
+		$classfile = 'ProductAttributeValue';
+		$classname = 'ProductAttributeValue';
+		$table_element = 'product_attribute_value';
+		$parent_element = 'product_attribute';
 	} elseif ($elementType == 'salary') {
 		$classpath = 'salaries/class';
 		$module = 'salaries';
@@ -16303,7 +16380,7 @@ function dolForgeSQLCriteriaCallback($matches)
 	// Test that operand is not a forbidden search field
 	if (!empty($newforbiddenfields)) {
 		$operandwithoutprefix = preg_replace('/^[a-z0-9_]+\./i', '', $operand);	// Remove prefix like t. or o. or s. or u. or d. or ...
-		if (in_array($operandwithoutprefix, $newforbiddenfields)) {
+		if (in_array(strtolower($operandwithoutprefix), $newforbiddenfields)) {
 			return '1=1';
 		}
 	}
@@ -16339,7 +16416,8 @@ function dolForgeSQLCriteriaCallback($matches)
 			$tmpelem = trim($tmpelem);
 			if (preg_match('/^\'(.*)\'$/', $tmpelem, $reg)) {
 				$tmpelemarray[$tmpkey] = "'" . $db->escape($db->sanitize($reg[1], 2, 1, 1, 1)) . "'";
-			} elseif (ctype_digit((string) $tmpelem)) {	// if only 0-9 chars, no .
+				$tmpelemarray[$tmpkey] = "'".$db->escape($db->sanitize($reg[1], 2, 1, 1, 1))."'";
+			} elseif (preg_match('/^[0-9]+$/', (string) $tmpelem)) {	// if only 0-9 chars, no .
 				$tmpelemarray[$tmpkey] = (int) $tmpelem;
 			} elseif (is_numeric((string) $tmpelem)) {	// it can be a float with a .
 				$tmpelemarray[$tmpkey] = (float) $tmpelem;
@@ -16366,7 +16444,7 @@ function dolForgeSQLCriteriaCallback($matches)
 	} else {
 		if (strtoupper($tmpescaped) == 'NULL') {
 			$tmpescaped = 'NULL';
-		} elseif (ctype_digit((string) $tmpescaped)) {	// if only 0-9 chars, no .
+		} elseif (preg_match('/^[0-9]+$/', (string) $tmpescaped)) {	// if only 0-9 chars, no .
 			$tmpescaped = (int) $tmpescaped;
 		} elseif (is_numeric((string) $tmpescaped)) {	// it can be a float with a .
 			$tmpescaped = (float) $tmpescaped;
@@ -17186,6 +17264,10 @@ function show_actions_messaging($conf, $langs, $db, $filterobj, $objcon = null, 
 				$out .= '<div class="timeline-body wordbreak small">';
 				$truncateLines = getDolGlobalInt('MAIN_TRUNCATE_TIMELINE_MESSAGE', 3);
 				$truncatedText = dolGetFirstLineOfText($newmess, $truncateLines);
+				// dolGetFirstLineOfText() cuts on <br> without caring about tag balance, so a message wrapped in
+				// a block tag leaves the excerpt with an unclosed tag. The browser then nests the read more link
+				// and the full text inside the excerpt, and hiding the excerpt hides the whole message (#39035).
+				$truncatedText = dolCloseUnclosedHtmlTags($truncatedText);
 				if ($truncateLines > 0 && strlen($newmess) > strlen($truncatedText)) {
 					$out .= '<div class="readmore-block --closed" >';
 					$out .= '	<div class="readmore-block__excerpt">';
