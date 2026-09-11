@@ -271,9 +271,36 @@ class FunctionsLibTest extends CommonClassTest
 		$sql = forgeSQLFromUniversalSearchCriteria($filter);
 		$this->assertEquals(" AND ((t.fk_soc IN ('1','2=b')))", $sql);
 
+		// Test use of forbiddenstring
+		$errorstr = '';
+		$filter = "(t.fk_soc:IN:'1','2=b')";
+		$sql = forgeSQLFromUniversalSearchCriteria($filter, $errorstr, 0, 0, 0, array('aaa'));
+		$this->assertEquals(" AND ((t.fk_soc IN ('1','2=b')))", $sql);
+
+		$filter = "(t.api_key:IN:'1','2=b')";
+		$sql = forgeSQLFromUniversalSearchCriteria($filter, $errorstr, 0, 0, 0, array('aaa'));
+		$this->assertEquals(" AND (1=1)", $sql);
+
+		$filter = "(t.fk_soc:IN:'1','2=b')";
+		$sql = forgeSQLFromUniversalSearchCriteria($filter, $errorstr, 0, 0, 0, array('fk_soc'));
+		$this->assertEquals(" AND (1=1)", $sql);
+
+
+		global $dolibarr_allow_unsecured_select_in_extrafields_filter;
+
+		// If $dolibarr_allow_unsecured_select_in_extrafields_filter is set
+		$dolibarr_allow_unsecured_select_in_extrafields_filter = 1;
+
 		$filter = "(t.fk_soc:IN:SELECT rowid FROM llx_societe WHERE fournisseur = 1)";
 		$sql = forgeSQLFromUniversalSearchCriteria($filter);
 		$this->assertEquals(" AND ((t.fk_soc IN (SELECT rowid FROM llx_societe WHERE fournisseur = 1)))", $sql);
+
+		// If $dolibarr_allow_unsecured_select_in_extrafields_filter is unset (default)
+		$dolibarr_allow_unsecured_select_in_extrafields_filter = 0;
+
+		$filter = "(t.fk_soc:IN:SELECT rowid FROM llx_societe WHERE fournisseur = 1)";
+		$sql = forgeSQLFromUniversalSearchCriteria($filter);
+		$this->assertEquals(" AND ((t.fk_soc IN (SELECTrowidFROMllx_societeWHEREfournisseur1)))", $sql);
 
 		return true;
 	}
@@ -1130,12 +1157,15 @@ class FunctionsLibTest extends CommonClassTest
 	{
 		$input = "x&<b>#</b>,\"'";    // " will be converted into '
 		$result = dol_escape_js($input);
+		print __METHOD__." result=".$result."\n";
 		$this->assertEquals("x&<b>#</b>,\'\'", $result, "Test mode=0");
 
 		$result = dol_escape_js($input, 1);
+		print __METHOD__." result=".$result."\n";
 		$this->assertEquals("x&<b>#</b>,\"\'", $result, "Test mode=1");
 
 		$result = dol_escape_js($input, 2);
+		print __METHOD__." result=".$result."\n";
 		$this->assertEquals("x&<b>#</b>,\\\"'", $result, "Test mode=2");
 	}
 
@@ -1147,6 +1177,8 @@ class FunctionsLibTest extends CommonClassTest
 	 */
 	public function testDolEscapeHtmlTag()
 	{
+		print __METHOD__."\n";
+
 		$input = 'x&<b>#</b>,"';    // & and " are converted into html entities, <b> are removed
 		$result = dol_escape_htmltag($input);
 		$this->assertEquals('x&amp;#,&quot;', $result);
@@ -1179,8 +1211,19 @@ class FunctionsLibTest extends CommonClassTest
 		<a href="mailto:abc+def@domain.com" id="sigEmail" style="color:#428BCA;">abc+def@domain.com</a><br>
 		<a href="https://www.another-domain.com" id="sigWebsite" style="color:#428BCA;">https://www.another-domain.com</a><br>
 		</div>';
-
 		$result = dol_escape_htmltag($input, 1, 1, 'common');
+		$this->assertEquals($input, $result);
+
+		// The same plus the tag 'code'
+		$input = '<div style="float:left; margin-left:0px; margin-right:5px">
+		<img id="sigPhoto" src="https://www.domain.com/aaa.png" style="height:65px; width:65px" />
+		</div>
+		<div style="margin-left:74px"><strong>A text here</strong> and more<br>
+		<a href="mailto:abc+def@domain.com" id="sigEmail" style="color:#428BCA;">abc+def@domain.com</a><br>
+		<a href="https://www.another-domain.com" id="sigWebsite" style="color:#428BCA;">https://www.another-domain.com</a><br>
+		<code>abc</code>
+		</div>';
+		$result = dol_escape_htmltag($input, 1, 1, 'common,code');
 		$this->assertEquals($input, $result);
 	}
 
@@ -1193,10 +1236,13 @@ class FunctionsLibTest extends CommonClassTest
 	public function testDolFormatAddress()
 	{
 		global $conf,$user,$langs,$db;
+
 		$conf = $this->savconf;
 		$user = $this->savuser;
 		$langs = $this->savlangs;
 		$db = $this->savdb;
+
+		print __METHOD__."\n";
 
 		$object = new Societe($db);
 		$object->initAsSpecimen();
@@ -1236,6 +1282,8 @@ class FunctionsLibTest extends CommonClassTest
 		$langs = $this->savlangs;
 		$db = $this->savdb;
 
+		print __METHOD__."\n";
+
 		$object = new Societe($db);
 		$object->initAsSpecimen();
 
@@ -1254,6 +1302,23 @@ class FunctionsLibTest extends CommonClassTest
 		$object->country_code = 'CA';
 		$phone = dol_print_phone('1234567890', $object->country_code, 0, 0, 0, ' ');
 		$this->assertEquals('<span class="paddingright">(123) 456-7890</span>', $phone, 'Phone for CA 1');
+
+		// Every digit must appear exactly once, in order, whatever the country format
+		$object->country_code = 'JO';
+		$phone = dol_print_phone('+96212345678', $object->country_code, 0, 0, 0, ' ');
+		$this->assertEquals('<span class="paddingright">+962 1 234 56 78</span>', $phone, 'Phone for JO 1');
+
+		$object->country_code = 'PE';
+		$phone = dol_print_phone('987654321', $object->country_code, 0, 0, 0, ' ');
+		$this->assertEquals('<span class="paddingright">987 654 321</span>', $phone, 'Phone for PE 1');
+
+		$object->country_code = 'PE';
+		$phone = dol_print_phone('+5111234567', $object->country_code, 0, 0, 0, ' ');
+		$this->assertEquals('<span class="paddingright">+511 123 4567</span>', $phone, 'Phone for PE 2');
+
+		$object->country_code = 'PE';
+		$phone = dol_print_phone('+51987654321', $object->country_code, 0, 0, 0, ' ');
+		$this->assertEquals('<span class="paddingright">+51 987 654 321</span>', $phone, 'Phone for PE 3');
 	}
 
 
@@ -1339,6 +1404,21 @@ class FunctionsLibTest extends CommonClassTest
 	}
 
 	/**
+	 * testVerifCondOnMethods
+	 *
+	 * @return	void
+	 */
+	public function testVerifCondOnMethods()
+	{
+		$a = verifCond('$user->hasRight("facture", "read")');
+		$this->assertTrue($a);
+
+		$a = verifCond('$user->hasMethodKo("facture", "read")');
+		$this->assertFalse($a);
+	}
+
+
+	/**
 	 * testGetDefaultTva
 	 *
 	 * @return	void
@@ -1400,12 +1480,12 @@ class FunctionsLibTest extends CommonClassTest
 		// Test RULE 2 (FR-FR)
 		print __METHOD__." rule=RULE 2 FR-FR\n";
 		$vat = get_default_tva($companyfr, $companyfr, 0);
-		$this->assertEquals(20, $vat, 'RULE 2');
+		$this->assertEquals(20, $vat, 'RULE 2 FR-FR - Check that the dictionary is set to have default VAT to 20');
 
 		// Test RULE 2 (FR-MC)
 		print __METHOD__." rule=RULE 2 FR-MC\n";
 		$vat = get_default_tva($companyfr, $companymc, 0);
-		$this->assertEquals(20, $vat, 'RULE 2');
+		$this->assertEquals(20, $vat, 'RULE 2 FR-MC');
 
 		// Test RULE 3 (FR-DE company)
 		print __METHOD__." rule=RULE 3 FR-DE\n";
@@ -1450,6 +1530,84 @@ class FunctionsLibTest extends CommonClassTest
 		print __METHOD__." rule=RULE 5 ECOMMERCE_200238EC FR-US\n";
 		$vat = get_default_tva($companyfr, $companyus, 0);
 		$this->assertEquals(0, $vat, 'RULE 5 ECOMMERCE_200238EC');
+	}
+
+	/**
+	 * testGetDefaultTvaForBuyerState
+	 *
+	 * Covers VATRULE 2: when the buyer department (state/province) has a VAT rule in the
+	 * dictionary, it becomes the default VAT rate. Also checks that only active rates of the
+	 * current entity are considered (an inactive rate must never be selected).
+	 *
+	 * @return	void
+	 */
+	public function testGetDefaultTvaForBuyerState()
+	{
+		global $conf,$user,$langs,$db;
+		$this->savconf = $conf;
+		$this->savuser = $user;
+		$this->savlangs = $langs;
+		$this->savdb = $db;
+
+		// Make sure the ecommerce directive left on by a previous test does not interfere with VATRULE 2
+		unset($conf->global->SERVICE_ARE_ECOMMERCE_200238EC);
+
+		// Seller subject to VAT in France
+		$companyfr = new Societe($db);
+		$companyfr->country_code = 'FR';
+		$companyfr->tva_assuj = 1;
+		$companyfr->tva_intra = 'FR9999';
+
+		// Find an existing department (state/province) to attach a VAT rule to, and the France country id
+		$stateid = 0;
+		$sql = "SELECT rowid FROM ".$db->prefix()."c_departements WHERE code_departement = '75'";
+		$resql = $db->query($sql);
+		if ($resql && $db->num_rows($resql)) {
+			$objdep = $db->fetch_object($resql);
+			$stateid = (int) $objdep->rowid;
+		}
+		if (empty($stateid)) {
+			$this->markTestSkipped('No department found in c_departements to run the VATRULE 2 test.');
+			return;
+		}
+
+		$frpaysid = 0;
+		$sql = "SELECT rowid FROM ".$db->prefix()."c_country WHERE code = 'FR'";
+		$resql = $db->query($sql);
+		if ($resql && $db->num_rows($resql)) {
+			$objpays = $db->fetch_object($resql);
+			$frpaysid = (int) $objpays->rowid;
+		}
+
+		// Insert two temporary VAT rules attached to that department:
+		//  - an ACTIVE one at 12 that must be selected
+		//  - an INACTIVE one at 25 (higher, so it would win the taux DESC sort) that must be ignored
+		$db->query("DELETE FROM ".$db->prefix()."c_tva WHERE code IN ('TESTVATACT', 'TESTVATINACT')");
+		$db->query("INSERT INTO ".$db->prefix()."c_tva (entity, fk_pays, fk_department_buyer, code, type_vat, taux, use_default, recuperableonly, active) VALUES (1, ".$frpaysid.", ".$stateid.", 'TESTVATACT', 0, 12, 0, 0, 1)");
+		$db->query("INSERT INTO ".$db->prefix()."c_tva (entity, fk_pays, fk_department_buyer, code, type_vat, taux, use_default, recuperableonly, active) VALUES (1, ".$frpaysid.", ".$stateid.", 'TESTVATINACT', 0, 25, 0, 0, 0)");
+
+		// Buyer located in that department
+		$buyer = new Societe($db);
+		$buyer->country_code = 'FR';
+		$buyer->tva_assuj = 1;
+		$buyer->state_id = $stateid;
+
+		// Case 1: an active department rate exists -> VATRULE 2 returns it, ignoring the inactive (higher) one
+		$vatactive = get_default_tva($companyfr, $buyer, 0);
+
+		// Case 2: no active department rate remains -> VATRULE 2 must not fire on the inactive rows
+		$db->query("UPDATE ".$db->prefix()."c_tva SET active = 0 WHERE code = 'TESTVATACT'");
+		$vatinactive = get_default_tva($companyfr, $buyer, 0);
+
+		// Cleanup fixtures before asserting so a failed assertion never leaves test data behind
+		$db->query("DELETE FROM ".$db->prefix()."c_tva WHERE code IN ('TESTVATACT', 'TESTVATINACT')");
+
+		// The active department rate is selected...
+		$this->assertStringContainsString('TESTVATACT', $vatactive, 'VATRULE 2 must select the active department VAT rate');
+		// ...and the inactive one is never selected (this is the fix)
+		$this->assertStringNotContainsString('TESTVATINACT', $vatactive, 'An inactive department VAT rate must not be selected by VATRULE 2');
+		// When no active department rate remains, VATRULE 2 does not select the (now inactive) rate either
+		$this->assertStringNotContainsString('TESTVATACT', $vatinactive, 'An inactive department VAT rate must not be selected by VATRULE 2');
 	}
 
 	/**

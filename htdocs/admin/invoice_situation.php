@@ -31,13 +31,6 @@
 
 // Load Dolibarr environment
 require '../main.inc.php';
-
-// Libraries
-require_once DOL_DOCUMENT_ROOT.'/core/lib/admin.lib.php';
-require_once DOL_DOCUMENT_ROOT.'/core/lib/invoice.lib.php';
-require_once DOL_DOCUMENT_ROOT.'/compta/facture/class/facture.class.php';
-require_once DOL_DOCUMENT_ROOT.'/core/class/html.formsetup.class.php';
-
 /**
  * @var Conf $conf
  * @var DoliDB $db
@@ -45,6 +38,11 @@ require_once DOL_DOCUMENT_ROOT.'/core/class/html.formsetup.class.php';
  * @var Translate $langs
  * @var User $user
  */
+// Libraries
+require_once DOL_DOCUMENT_ROOT.'/core/lib/admin.lib.php';
+require_once DOL_DOCUMENT_ROOT.'/core/lib/invoice.lib.php';
+require_once DOL_DOCUMENT_ROOT.'/compta/facture/class/facture.class.php';
+require_once DOL_DOCUMENT_ROOT.'/core/class/html.formsetup.class.php';
 
 // Load translation files required by the page
 $langs->loadLangs(array('admin', 'errors', 'other', 'bills'));
@@ -71,10 +69,19 @@ $form = new Form($db);
 $formSetup = new FormSetup($db);
 
 
-// Setup conf MYMODULE_MYPARAM4 : example of quick define write style
-$formSetup->newItem('INVOICE_USE_SITUATION')
-	->setAsYesNo()
-	->nameText = $langs->trans('UseSituationInvoices');
+// INVOICE_USE_SITUATION is a 3-state flag (0=off, 1=cumulative/legacy, 2=progressive), see admin/invoice.php.
+// A yes/no toggle can only write 0 or 1 and deletes the const when turned off (ajax_constantonoff calls
+// dolibarr_del_const): mode 2 could not be selected and was silently dropped. Use a 3-value select, which
+// writes the literal value via dolibarr_set_const and never deletes the const.
+$item = $formSetup->newItem('INVOICE_USE_SITUATION');
+$item->setAsSelect(array(
+	0 => $langs->trans('Disabled'),
+	1 => $langs->trans('SituationInvoiceModeCumulative'),
+	2 => $langs->trans('SituationInvoiceModeProgressive'),
+));
+$situationModeHelp = $langs->trans('SituationInvoiceModeHelp')
+	.'<br><b>'.$langs->trans('SituationInvoiceModeWarning').'</b>';
+$item->nameText = $langs->trans('SituationInvoiceMode').info_admin($situationModeHelp, 0, 0, 'warning', 'clearboth');
 
 $item = $formSetup->newItem('INVOICE_USE_SITUATION_CREDIT_NOTE')
 	->setAsYesNo()
@@ -119,7 +126,7 @@ $form->load_cache_conditions_paiements();
 if (getDolGlobalString('INVOICE_SITUATION_DEFAULT_RETAINED_WARRANTY_COND_ID') && isset($form->cache_conditions_paiements[getDolGlobalString('INVOICE_SITUATION_DEFAULT_RETAINED_WARRANTY_COND_ID')]['label'])) {
 	$item->fieldOutputOverride = $form->cache_conditions_paiements[getDolGlobalString('INVOICE_SITUATION_DEFAULT_RETAINED_WARRANTY_COND_ID')]['label'];
 }
-$item->fieldInputOverride = $form->getSelectConditionsPaiements($conf->global->INVOICE_SITUATION_DEFAULT_RETAINED_WARRANTY_COND_ID, 'INVOICE_SITUATION_DEFAULT_RETAINED_WARRANTY_COND_ID', -1, 1);
+$item->fieldInputOverride = $form->getSelectConditionsPaiements(getDolGlobalInt("INVOICE_SITUATION_DEFAULT_RETAINED_WARRANTY_COND_ID"), 'INVOICE_SITUATION_DEFAULT_RETAINED_WARRANTY_COND_ID', -1, 1);
 
 
 /*

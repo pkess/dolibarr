@@ -11,9 +11,9 @@
  * Copyright (C) 2013-2024	Alexandre Spangaro			<alexandre@inovea-conseil.com>
  * Copyright (C) 2015-2017	Jean-François Ferry			<jfefe@aternatik.fr>
  * Copyright (C) 2015		Ari Elbaz (elarifr)			<github@accedinfo.com>
- * Copyright (C) 2015-2018	Charlene Benke				<charlie@patas-monkey.com>
+ * Copyright (C) 2015-2026	Charlene Benke				<charlene@patas-monkey.com>
  * Copyright (C) 2016		Raphaël Doursenaud			<rdoursenaud@gpcsolutions.fr>
- * Copyright (C) 2018-2025  Frédéric France				<frederic.france@free.fr>
+ * Copyright (C) 2018-2026  Frédéric France				<frederic.france@free.fr>
  * Copyright (C) 2018		David Beniamine				<David.Beniamine@Tetras-Libre.fr>
  * Copyright (C) 2024-2025	MDW							<mdeweerd@users.noreply.github.com>
  *
@@ -41,6 +41,7 @@ require '../main.inc.php';
 /**
  * @var Conf $conf
  * @var DoliDB $db
+ * @var ExtraFields $extrafields
  * @var HookManager $hookmanager
  * @var Translate $langs
  * @var User $user
@@ -55,7 +56,6 @@ require_once DOL_DOCUMENT_ROOT.'/core/class/html.formfile.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/company.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/images.lib.php';
 require_once DOL_DOCUMENT_ROOT.'/core/lib/usergroups.lib.php';
-require_once DOL_DOCUMENT_ROOT.'/core/class/extrafields.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/class/html.formadmin.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/class/html.formcompany.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/class/html.formother.class.php';
@@ -86,6 +86,7 @@ $cancel = GETPOST('cancel', 'alpha');
 $contextpage = GETPOST('contextpage', 'aZ') ? GETPOST('contextpage', 'aZ') : 'usercard'; // To manage different context of search
 $backtopage = GETPOST('backtopage');
 $backtopageforcancel = GETPOST('backtopageforcancel');
+$forcepasswordchange = GETPOSTINT('forcepasswordchange');
 
 if (empty($id) && $action != 'add' && $action != 'create') {
 	$id = $user->id;
@@ -100,7 +101,6 @@ $dateofbirth = dol_mktime(0, 0, 0, GETPOSTINT('dateofbirthmonth'), GETPOSTINT('d
 $childids = $user->getAllChildIds(1);	// For test on hrm fields (like salary visibility)
 
 $object = new User($db);
-$extrafields = new ExtraFields($db);
 
 // fetch optionals attributes and labels
 $extrafields->fetch_name_optionals_label($object->table_element);
@@ -164,6 +164,13 @@ if ($id > 0) {
 	$permissiontoeditpasswordandsee = ((($user->id == $id) && $user->hasRight("user", "self", "password")) || (($user->id != $id) && $user->hasRight("user", "user", "password") && $user->admin))&& (empty($user->socid) || $user->socid == $object->socid);
 	$permissiontoeditpasswordandsend = ((($user->id == $id) && $user->hasRight("user", "self", "password")) || (($user->id != $id) && $user->hasRight("user", "user", "password")))&& (empty($user->socid) || $user->socid == $object->socid);
 }
+
+// Permission to read salary and hourly rate
+$permissiontoseesalary = (empty($user->socid) && (
+	(isModEnabled('salaries') && $user->hasRight("salaries", "read") && ($id == 0 || in_array($id, $childids)))		// If user is a manager of employee
+	|| (isModEnabled('salaries') && $user->hasRight("salaries", "readall"))
+	|| (isModEnabled('hrm') && $user->hasRight("hrm", "employee", "read")))
+	|| (!isModEnabled('salaries') && !isModEnabled('hrm') && ($user->admin || $id == 0 || in_array($id, $childids))));
 
 $passwordismodified = false;
 $ldap = null;
@@ -249,16 +256,22 @@ if (empty($reshook)) {
 
 			$object = new User($db);
 			$object->fetch($id);
-			$object->oldcopy = clone $object; // @phan-suppress-current-line PhanTypeMismatchProperty
-
-			$result = $object->delete($user);
-			if ($result < 0) {
-				$langs->load("errors");
-				setEventMessages($langs->trans("ErrorUserCannotBeDelete"), null, 'errors');
+			if ($object->admin && empty($user->admin)) {
+				// If user to delete is an admin user and if logged user is not admin, we deny the operation.
+				$error++;
+				setEventMessages($langs->trans("OnlyAdminUsersCanDeleteAdminUsers"), null, 'errors');
 			} else {
-				setEventMessages($langs->trans("RecordDeleted"), null);
-				header("Location: ".DOL_URL_ROOT."/user/list.php?restore_lastsearch_values=1");
-				exit;
+				$object->oldcopy = clone $object; // @phan-suppress-current-line PhanTypeMismatchProperty
+
+				$result = $object->delete($user);
+				if ($result < 0) {
+					$langs->load("errors");
+					setEventMessages($langs->trans("ErrorUserCannotBeDelete"), null, 'errors');
+				} else {
+					setEventMessages($langs->trans("RecordDeleted"), null);
+					header("Location: ".DOL_URL_ROOT."/user/list.php?restore_lastsearch_values=1");
+					exit;
+				}
 			}
 		}
 	}
@@ -318,6 +331,16 @@ if (empty($reshook)) {
 			$object->email = preg_replace('/\s+/', '', GETPOST("email", 'alphanohtml'));
 			$object->job = GETPOST("job", 'alphanohtml');
 			$object->signature = GETPOST("signature", 'restricthtml');
+			// restricthtml may swap the value with the literal 'ErrorTooManyLinksIntoHTMLString'
+			// when the html exceeds MAIN_SECURITY_MAX_IMG_IN_HTML_CONTENT (see issue #27987).
+			// Refuse the save so the literal does not end up persisted and later sent as an
+			// email body to customers.
+			if ($object->signature === 'ErrorTooManyLinksIntoHTMLString') {
+				$error++;
+				$langs->load("errors");
+				setEventMessages($langs->trans('ErrorTooManyLinksIntoHTMLString'), null, 'errors');
+				$action = 'create';
+			}
 			$object->accountancy_code = GETPOST("accountancy_code", 'alphanohtml');
 			$object->note_public = GETPOST("note_public", 'restricthtml');
 			$object->note_private = GETPOST("note_private", 'restricthtml');
@@ -327,16 +350,18 @@ if (empty($reshook)) {
 			$object->fk_user_holiday_validator = GETPOSTINT("fk_user_holiday_validator") > 0 ? GETPOSTINT("fk_user_holiday_validator") : 0;
 			$object->employee = GETPOSTINT('employee');
 
-			$object->thm = GETPOST("thm", 'alphanohtml') != '' ? GETPOSTFLOAT("thm") : '';
-			$object->thm = price2num($object->thm);
-			$object->tjm = GETPOST("tjm", 'alphanohtml') != '' ? GETPOSTFLOAT("tjm") : '';
-			$object->tjm = price2num($object->tjm);
-			$object->salary = GETPOST("salary", 'alphanohtml') != '' ? GETPOSTFLOAT("salary") : '';
-			$object->salary = price2num($object->salary);
-			$object->salaryextra = GETPOST("salaryextra", 'alphanohtml');
-			//$object->salaryextra = price2num($object->salaryextra);
-			$object->weeklyhours = GETPOST("weeklyhours", 'alphanohtml') != '' ? GETPOSTFLOAT("weeklyhours") : '';
-			$object->weeklyhours = price2num($object->weeklyhours);
+			if ($permissiontoseesalary) {
+				$object->thm = GETPOST("thm", 'alphanohtml') != '' ? GETPOSTFLOAT("thm") : '';
+				$object->thm = price2num($object->thm);
+				$object->tjm = GETPOST("tjm", 'alphanohtml') != '' ? GETPOSTFLOAT("tjm") : '';
+				$object->tjm = price2num($object->tjm);
+				$object->salary = GETPOST("salary", 'alphanohtml') != '' ? GETPOSTFLOAT("salary") : '';
+				$object->salary = price2num($object->salary);
+				$object->salaryextra = GETPOST("salaryextra", 'alphanohtml') != '' ? GETPOSTFLOAT("salaryextra") : '';
+				$object->salaryextra = price2num($object->salaryextra);
+				$object->weeklyhours = GETPOST("weeklyhours", 'alphanohtml') != '' ? GETPOSTFLOAT("weeklyhours") : '';
+				$object->weeklyhours = price2num($object->weeklyhours);
+			}
 
 			$object->color = GETPOST("color", 'alphanohtml') != '' ? str_replace('#', '', (string) GETPOST("color", 'alphanohtml')) : '';
 
@@ -345,6 +370,7 @@ if (empty($reshook)) {
 			$object->datestartvalidity = $datestartvalidity;
 			$object->dateendvalidity = $dateendvalidity;
 			$object->birth = $dateofbirth;
+			$object->force_pass_change = $forcepasswordchange;
 
 			$object->fk_warehouse = GETPOSTINT('fk_warehouse');
 
@@ -471,8 +497,8 @@ if (empty($reshook)) {
 				if ($permissiontoeditpasswordandsee) {
 					$object->pass = GETPOST("password", 'password');
 				}
-				if ($permissiontoeditpasswordandsee || $user->hasRight("api", "apikey", "generate")) {
-					$object->api_key = (GETPOST("api_key", 'alphanohtml')) ? GETPOST("api_key", 'alphanohtml') : $object->api_key;
+				if ($permissiontoeditpasswordandsee) {
+					$object->api_key = (GETPOSTISSET("api_key") ? GETPOST("api_key", 'alphanohtml') : $object->api_key);
 				}
 				if (!empty($user->admin) && $user->id != $id) {
 					// admin flag can only be set/unset by an admin user and not four ourself
@@ -503,6 +529,16 @@ if (empty($reshook)) {
 				$object->email = preg_replace('/\s+/', '', GETPOST("email", 'alphanohtml'));
 				$object->job = GETPOST("job", 'alphanohtml');
 				$object->signature = GETPOST("signature", 'restricthtml');
+				// restricthtml may swap the value with the literal 'ErrorTooManyLinksIntoHTMLString'
+				// when the html exceeds MAIN_SECURITY_MAX_IMG_IN_HTML_CONTENT (see issue #27987).
+				// Refuse the save so the literal does not end up persisted and later sent as an
+				// email body to customers.
+				if ($object->signature === 'ErrorTooManyLinksIntoHTMLString') {
+					$error++;
+					$langs->load("errors");
+					setEventMessages($langs->trans('ErrorTooManyLinksIntoHTMLString'), null, 'errors');
+					$action = 'edit';
+				}
 				$object->accountancy_code = GETPOST("accountancy_code", 'alphanohtml');
 				$object->openid = GETPOST("openid", 'alphanohtml');
 				$object->fk_user = GETPOSTINT("fk_user") > 0 ? GETPOSTINT("fk_user") : 0;
@@ -510,16 +546,19 @@ if (empty($reshook)) {
 				$object->fk_user_holiday_validator = GETPOSTINT("fk_user_holiday_validator") > 0 ? GETPOSTINT("fk_user_holiday_validator") : 0;
 				$object->employee = GETPOSTINT('employee');
 
-				$object->thm = GETPOST("thm", 'alphanohtml') != '' ? GETPOSTFLOAT("thm") : '';
-				$object->thm = price2num($object->thm);
-				$object->tjm = GETPOST("tjm", 'alphanohtml') != '' ? GETPOSTFLOAT("tjm") : '';
-				$object->tjm = price2num($object->tjm);
-				$object->salary = GETPOST("salary", 'alphanohtml') != '' ? GETPOSTFLOAT("salary") : '';
-				$object->salary = price2num($object->salary);
-				$object->salaryextra = GETPOST("salaryextra", 'alphanohtml') != '' ? GETPOSTFLOAT("salaryextra") : '';
-				//$object->salaryextra = price2num($object->salaryextra);
-				$object->weeklyhours = GETPOST("weeklyhours", 'alphanohtml') != '' ? GETPOSTFLOAT("weeklyhours") : '';
-				$object->weeklyhours = price2num($object->weeklyhours);
+				// Only users allowed to see salary/HR fields can modify them (issue #32909)
+				if ($permissiontoseesalary) {
+					$object->thm = GETPOST("thm", 'alphanohtml') != '' ? GETPOSTFLOAT("thm") : '';
+					$object->thm = price2num($object->thm);
+					$object->tjm = GETPOST("tjm", 'alphanohtml') != '' ? GETPOSTFLOAT("tjm") : '';
+					$object->tjm = price2num($object->tjm);
+					$object->salary = GETPOST("salary", 'alphanohtml') != '' ? GETPOSTFLOAT("salary") : '';
+					$object->salary = price2num($object->salary);
+					$object->salaryextra = GETPOST("salaryextra", 'alphanohtml') != '' ? GETPOSTFLOAT("salaryextra") : '';
+					$object->salaryextra = price2num($object->salaryextra);
+					$object->weeklyhours = GETPOST("weeklyhours", 'alphanohtml') != '' ? GETPOSTFLOAT("weeklyhours") : '';
+					$object->weeklyhours = price2num($object->weeklyhours);
+				}
 
 				$object->color = GETPOST("color", 'alphanohtml') != '' ? str_replace('#', '', (string) GETPOST("color", 'alphanohtml')) : '';
 				$object->dateemployment = $dateemployment;
@@ -527,6 +566,7 @@ if (empty($reshook)) {
 				$object->datestartvalidity = $datestartvalidity;
 				$object->dateendvalidity = $dateendvalidity;
 				$object->birth = $dateofbirth;
+				$object->force_pass_change = $forcepasswordchange;
 
 				if (isModEnabled('stock')) {
 					$object->fk_warehouse = GETPOSTINT('fk_warehouse');
@@ -561,6 +601,9 @@ if (empty($reshook)) {
 					$isimage = image_format_supported($_FILES['photo']['name']);
 					if ($isimage > 0) {
 						$object->photo = dol_sanitizeFileName($_FILES['photo']['name']);
+						if ($object->id == $user->id) {
+							$user->photo = $object->photo;
+						}
 					} else {
 						$error++;
 						$langs->load("errors");
@@ -815,6 +858,7 @@ if (empty($reshook)) {
 				$clone->id = 0;
 				$clone->email = (getDolGlobalString('USER_MAIL_REQUIRED') ? GETPOST('new_email', 'alphanohtml') : '');
 				$clone->api_key = '';
+				$clone->admin = ($user->admin ? $object->admin : 0); 	// If I am admin, I can clone the admin flag of a user, otherwiseadmin flag is forced to false.
 
 				$parts = explode(' ', GETPOST('clone_name'), 2);
 				$clone->firstname = $parts[0];
@@ -930,7 +974,7 @@ llxHeader('', $title, $help_url, '', 0, 0, '', '', '', 'mod-user page-card');
 if ($action == 'create' || $action == 'adduserldap') {
 	print load_fiche_titre($title, '', 'user');
 
-	print '<span class="opacitymedium">'.$langs->trans("CreateInternalUserDesc", $langs->trans("CreateExternalUser"))."</span><br>\n";
+	print '<span class="opacitymedium">'.$langs->trans("CreateInternalUserDesc", $langs->transnoentities("CreateExternalUser"))."</span><br>\n";
 	print "<br>";
 
 
@@ -1072,7 +1116,7 @@ if ($action == 'create' || $action == 'adduserldap') {
 	if (!empty($conf->use_javascript_ajax)) {
 		// Add code to generate the login when creating a new user.
 		// Best rule to generate would be to use the same rule than dol_buildlogin() but currently it is a PHP function not available in js.
-		// TODO Implement a dol_buildlogin in javascript.
+		// TODO Implement a function dol_buildlogin in javascript like the version in PHP.
 		$charforseparator = getDolGlobalString("MAIN_USER_SEPARATOR_CHAR_FOR_GENERATED_LOGIN", '.');
 		if ($charforseparator == 'none') {
 			$charforseparator = '';
@@ -1084,7 +1128,10 @@ if ($action == 'create' || $action == 'adduserldap') {
 
 					lastname = $("#lastname").val().toLowerCase();
 			';
-		if (getDolGlobalString('MAIN_BUILD_LOGIN_RULE') == 'f.lastname') {
+		if (getDolGlobalString('MAIN_BUILD_LOGIN_RULE') == 'flastname') {
+			print '			firstname = $("#firstname").val().toLowerCase().replace(/\s+/g, \'\').trim()[0];';
+			$charforseparator = '';
+		} elseif (getDolGlobalString('MAIN_BUILD_LOGIN_RULE') == 'f.lastname') {
 			print '			firstname = $("#firstname").val().toLowerCase().replace(/\s+/g, \'\').trim()[0];';
 		} else {
 			print '			firstname = $("#firstname").val().toLowerCase().replace(/\s+/g, \'\').trim();';
@@ -1239,7 +1286,6 @@ if ($action == 'create' || $action == 'adduserldap') {
 			}
 		}
 	}
-
 	// Other form for user password
 	$parameters = array('valuetoshow' => $valuetoshow, 'password' => $password, 'caneditpasswordandsee' => $permissiontoeditpasswordandsee, 'caneditpasswordandsend' => $permissiontoeditpasswordandsend);
 	$reshook = $hookmanager->executeHooks('printUserPasswordField', $parameters, $object, $action); // Note that $action and $object may have been modified by hook
@@ -1251,6 +1297,23 @@ if ($action == 'create' || $action == 'adduserldap') {
 
 	print $valuetoshow;
 	print '</td></tr>';
+
+	// Force update on next login -- only on dolibarr auth context
+	if ($_SESSION["dol_authmode"] == 'dolibarr') {
+		print '<tr><td class="titlefieldcreate"></td>';
+		print '<td>';
+		//$permissiontoselfeditpassword = $object->hasRight('user', 'self', 'password');
+		$permissiontoselfeditpassword = 1;	// In creation, we suppose it to true
+		if ($permissiontoselfeditpassword) { // @phpstan-ignore-line because value is forced
+			print '<input type="checkbox" name="forcepasswordchange" id="forcepasswordchange" value="1"'.(GETPOST('forcepasswordchange') == '1' ? ' checked="checked"' : '').'>';
+			print '<label class="opacitymedium" for="forcepasswordchange">'.$langs->trans("ForcePasswordChange").'</label>';
+		} else {
+			print '<input type="checkbox" name="forcepasswordchange" value="1" class="colorgrey valignmiddle" disabled>';
+			print $form->textwithpicto('<span class="opacitymedium">'.$langs->trans("ForcePasswordChange").'</span>', $langs->trans("UserDoesNotHaveRightsToChangeHisPassword"));
+		}
+		print '</td>';
+		print "</tr>\n";
+	}
 
 	if (!getDolGlobalString('API_IN_TOKEN_TABLE')) {
 		if (isModEnabled('api')) {
@@ -1414,7 +1477,7 @@ if ($action == 'create' || $action == 'adduserldap') {
 	}
 
 	// Multicompany
-	if (isModEnabled('multicompany') && is_object($mc)) {
+	if (isModEnabled('multicompany') && isset($mc) && is_object($mc)) {
 		// This is now done with hook formObjectOptions. Keep this code for backward compatibility with old multicompany module
 		if (!method_exists($mc, 'formObjectOptions')) {
 			if (!getDolGlobalString('MULTICOMPANY_TRANSVERSE_MODE') && $conf->entity == 1 && $user->admin && !$user->entity) {	// condition must be same for create and edit mode
@@ -1476,9 +1539,7 @@ if ($action == 'create' || $action == 'adduserldap') {
 	print '<input class="maxwidth200 maxwidth150onsmartphone" type="text" name="job" value="'.dol_escape_htmltag(GETPOST('job', 'alphanohtml')).'">';
 	print '</td></tr>';
 
-	if ((isModEnabled('salaries') && $user->hasRight("salaries", "read") && in_array($id, $childids))
-		|| (isModEnabled('salaries') && $user->hasRight("salaries", "readall"))
-		|| (isModEnabled('hrm') && $user->hasRight("hrm", "employee", "read"))) {
+	if ($permissiontoseesalary) {
 		$langs->load("salaries");
 
 		// THM
@@ -1788,9 +1849,7 @@ if ($action == 'create' || $action == 'adduserldap') {
 			print "</tr>\n";
 
 			// Sensitive salary/value information
-			if ((empty($user->socid) && in_array($id, $childids))	// A user can always see salary/value information for its subordinates
-				|| (isModEnabled('salaries') && $user->hasRight("salaries", "readall"))
-				|| (isModEnabled('hrm') && $user->hasRight("hrm", "employee", "read"))) {
+			if ($permissiontoseesalary) {
 				$langs->load("salaries");
 
 				// Salary
@@ -1902,7 +1961,7 @@ if ($action == 'create' || $action == 'adduserldap') {
 			}
 
 			// Multicompany
-			if (isModEnabled('multicompany') && is_object($mc)) {
+			if (isModEnabled('multicompany') && isset($mc) && is_object($mc)) {
 				// This is now done with hook formObjectOptions. Keep this code for backward compatibility with old multicompany module
 				if (!method_exists($mc, 'formObjectOptions')) {
 					if (isModEnabled('multicompany') && !getDolGlobalString('MULTICOMPANY_TRANSVERSE_MODE') && $conf->entity == 1 && $user->admin && !$user->entity) {
@@ -2011,6 +2070,28 @@ if ($action == 'create' || $action == 'adduserldap') {
 			print '</td>';
 			print "</tr>\n";
 
+			// Force update on next login only on dolibarr auth mode
+			if ($_SESSION["dol_authmode"] == 'dolibarr') {
+				print '<tr><td class="titlefieldcreate">'.$form->textwithpicto($langs->trans("PasswordToChange"), $langs->trans("ForcePasswordChange")).'</td>';
+				print '<td>';
+				$permissiontoselfeditpassword = $object->hasRight('user', 'self', 'password');
+				if ($permissiontoselfeditpassword) {
+					if (getDolGlobalInt('MAIN_OPTIMIZEFORTEXTBROWSER') < 2) {
+						print '<input type="checkbox" class="colorgrey" disabled name="forcepasswordchange" value="1"'.($object->force_pass_change ? ' checked="checked"' : '').'>';
+						//print $langs->trans("AtNextLogin");
+						print '<span class="opacitymedium">'.yn($object->force_pass_change).'</span>';
+					} else {
+						print yn($object->force_pass_change);
+						print '<span class="opacitymedium">'.yn($object->force_pass_change).'</span>';
+					}
+				} else {
+					print '<input type="checkbox" name="forcepasswordchange" value="1" disabled class="valignmiddle">';
+					print '<span class="opacitymedium" title="'.$langs->trans("UserDoesNotHaveRightsToChangeHisPassword").'">'.$langs->trans("No").'</span>';
+				}
+				print '</td>';
+				print "</tr>\n";
+			}
+
 			// Password for LDAP or HTTP Basic
 			$valuetoshow = '';
 			if (preg_match('/ldap/', $dolibarr_main_authentication)) {
@@ -2095,7 +2176,7 @@ if ($action == 'create' || $action == 'adduserldap') {
 			}
 
 			// Token for API
-			if (isModEnabled('api') && ($user->id == $id || $user->admin || $user->hasRight("api", "apikey", "generate"))) {
+			if (isModEnabled('api') && ($user->id == $id || $user->admin)) {
 				print '<tr class="nooddeven"><td>'.$langs->trans("ApiKey").'</td>';
 				print '<td>';
 				if (getDolGlobalString('API_IN_TOKEN_TABLE')) {
@@ -2327,8 +2408,9 @@ if ($action == 'create' || $action == 'adduserldap') {
 
 						print '<!-- List of groups of the user -->'."\n";
 						print '<table class="noborder centpercent">'."\n";
-						print '<tr class="liste_titre"><th class="liste_titre">'.$langs->trans("Groups").'</th>'."\n";
-						print '<th class="liste_titre right">';
+						print '<tr class="liste_titre">';
+						//print '<th class="liste_titre">'.$langs->trans("Groups").'</th>'."\n";
+						print '<th class="liste_titre right" colspan="2">';
 						if ($permissiontoeditgroup) {
 							print $form->select_dolgroups(0, 'group', 1, $exclude, 0, '', array(), (string) $object->entity, false, 'maxwidth150');
 							print ' &nbsp; ';
@@ -2685,6 +2767,7 @@ if ($action == 'create' || $action == 'adduserldap') {
 			print '</td>';
 			print "</tr>\n";
 
+
 			// Pass
 			print '<tr><td class="titlefieldcreate">'.$langs->trans("Password").'</td>';
 			print '<td>';
@@ -2699,7 +2782,7 @@ if ($action == 'create' || $action == 'adduserldap') {
 				if ($permissiontoeditpasswordandsee) {
 					$valuetoshow .= ($valuetoshow ? (' '.$langs->trans("or").' ') : '').'<input maxlength="128" type="password" class="minwidth300 maxwidth400 widthcentpercentminusx" id="password" name="password" value="'.dol_escape_htmltag($object->pass).'" autocomplete="new-password" spellcheck="false">';
 					if (!empty($conf->use_javascript_ajax)) {
-						$valuetoshow .= img_picto((getDolGlobalString('USER_PASSWORD_GENERATED') === 'none' ? $langs->transnoentities('NoPasswordGenerationRuleConfigured') : $langs->transnoentities('Generate')), 'refresh', 'id="generate_password" class="paddingleft'.(getDolGlobalString('USER_PASSWORD_GENERATED') === 'none' ? ' opacitymedium' : ' linkobject').'"');
+						$valuetoshow .= img_picto((getDolGlobalString('USER_PASSWORD_GENERATED') === 'none' ? $langs->transnoentities('NoPasswordGenerationRuleConfigured') : $langs->transnoentities('Generate')), 'refresh', 'id="generate_password" class="paddingleft'.(getDolGlobalString('USER_PASSWORD_GENERATED') === 'none' ? ' ' : ' linkobject').'"');
 					}
 				} else {
 					$valuetoshow .= ($valuetoshow ? (' '.$langs->trans("or").' ') : '').preg_replace('/./i', '*', $object->pass);
@@ -2717,12 +2800,33 @@ if ($action == 'create' || $action == 'adduserldap') {
 			print $valuetoshow;
 			print "</td></tr>\n";
 
+			// Force update on next login only on dolibarr auth mode
+			if ($_SESSION["dol_authmode"] == 'dolibarr') {
+				print '<tr>';
+				print '<td></td><td>';
+				$permissiontoselfeditpassword = $object->hasRight('user', 'self', 'password');
+				if ($permissiontoselfeditpassword) {
+					if ($permissiontoedit) {
+						print '<input type="checkbox" name="forcepasswordchange" id="forcepasswordchange" value="1"'.($object->force_pass_change ? ' checked="checked"' : '').'>';
+						print '<label class="opacitylow" for="forcepasswordchange">'.$langs->trans("ForcePasswordChange").'</label>';
+					} else {
+						print '<input type="checkbox" name="forcepasswordchange" class="colorgrey" disabled value="1"'.($object->force_pass_change ? ' checked="checked"' : '').'>';
+						print $langs->trans("ForcePasswordChange");
+					}
+				} else {
+					print '<input type="checkbox" name="forcepasswordchange" value="1" class="colorgrey" disabled>';
+					print '<span class="opacitymedium" title="'.$langs->trans("UserDoesNotHaveRightsToChangeHisPassword").'">'.$langs->trans("ForcePasswordChange").'</span>';
+				}
+
+				print '</td></tr>';
+			}
+
 			// API key
 			if (!getDolGlobalString('API_IN_TOKEN_TABLE')) {
 				if (isModEnabled('api')) {
 					print '<tr><td>'.$langs->trans("ApiKey").'</td>';
 					print '<td>';
-					if ($permissiontoeditpasswordandsee || $user->hasRight("api", "apikey", "generate")) {
+					if ($permissiontoeditpasswordandsee) {
 						print '<input class="minwidth300 maxwidth400 widthcentpercentminusx" minlength="12" maxlength="128" type="text" id="api_key" name="api_key" value="'.$object->api_key.'" autocomplete="off" spellcheck="false">';
 						if (!empty($conf->use_javascript_ajax)) {
 							print img_picto($langs->transnoentities('Generate'), 'refresh', 'id="generate_api_key" class="linkobject paddingleft"');
@@ -2987,7 +3091,7 @@ if ($action == 'create' || $action == 'adduserldap') {
 
 			// Multicompany
 			// TODO check if user not linked with the current entity before change entity (thirdparty, invoice, etc.) !!
-			if (isModEnabled('multicompany') && is_object($mc)) {
+			if (isModEnabled('multicompany') && isset($mc) && is_object($mc)) {
 				// This is now done with hook formObjectOptions. Keep this code for backward compatibility with old multicompany module
 				if (!method_exists($mc, 'formObjectOptions')) {
 					if (empty($conf->multicompany->transverse_mode) && $conf->entity == 1 && $user->admin && !$user->entity) {
@@ -3060,9 +3164,7 @@ if ($action == 'create' || $action == 'adduserldap') {
 			print "</tr>\n";
 
 			// Sensitive salary/value information
-			if ((empty($user->socid) && in_array($id, $childids))	// A user can always see salary/value information for its subordinates
-				|| (isModEnabled('salaries') && $user->hasRight("salaries", "readall"))
-				|| (isModEnabled('hrm') && $user->hasRight("hrm", "employee", "read"))) {
+			if ($permissiontoseesalary) {
 				$langs->load("salaries");
 
 				// Salary
@@ -3169,14 +3271,6 @@ if ($action == 'create' || $action == 'adduserldap') {
 
 			print $formfile->showdocuments('user', $filename, $filedir, $urlsource, $genallowed, $delallowed, $object->model_pdf, 0, 0, 0, 28, 0, '', '', '', !is_object($societe) || empty($societe->default_lang) ? '' : $societe->default_lang);
 			$somethingshown = $formfile->numoffiles;
-
-			// Show links to link elements
-			$tmparray = $form->showLinkToObjectBlock($object, array(), array(), 1);
-			$linktoelem = $tmparray['linktoelem'];
-			$htmltoenteralink = $tmparray['htmltoenteralink'];
-			print $htmltoenteralink;
-
-			$somethingshown = $form->showLinkedObjectBlock($object, $linktoelem);
 
 			$MAXEVENT = 10;
 

@@ -12,7 +12,7 @@
  * Copyright (C) 2016		Ferran Marcet			<fmarcet@2byte.es>
  * Copyright (C) 2016		Yasser Carreón			<yacasia@gmail.com>
  * Copyright (C) 2018	    Quentin Vial-Gouteyron  <quentin.vial-gouteyron@atm-consulting.fr>
- * Copyright (C) 2024-2025	MDW						<mdeweerd@users.noreply.github.com>
+ * Copyright (C) 2024-2026	MDW						<mdeweerd@users.noreply.github.com>
  * Copyright (C) 2024-2025  Frédéric France         <frederic.france@free.fr>
  * Copyright (C) 2025		Nick Fragoulis
  *
@@ -38,6 +38,14 @@
 
 // Load Dolibarr environment
 require '../main.inc.php';
+/**
+ * @var Conf $conf
+ * @var DoliDB $db
+ * @var HookManager $hookmanager
+ * @var Societe $mysoc
+ * @var Translate $langs
+ * @var User $user
+ */
 require_once DOL_DOCUMENT_ROOT.'/core/class/html.formfile.class.php';
 require_once DOL_DOCUMENT_ROOT.'/reception/class/reception.class.php';
 require_once DOL_DOCUMENT_ROOT.'/core/class/html.formcompany.class.php';
@@ -65,14 +73,6 @@ if (isModEnabled('project')) {
 	require_once DOL_DOCUMENT_ROOT.'/projet/class/project.class.php';
 	require_once DOL_DOCUMENT_ROOT.'/core/class/html.formprojet.class.php';
 }
-/**
- * @var Conf $conf
- * @var DoliDB $db
- * @var HookManager $hookmanager
- * @var Societe $mysoc
- * @var Translate $langs
- * @var User $user
- */
 
 $langs->loadLangs(array("receptions", "companies", "bills", 'orders', 'stocks', 'other', 'propal', 'sendings'));
 
@@ -133,6 +133,28 @@ $extrafields->fetch_name_optionals_label($objectorder->table_element_line);
 
 // Load object. Make an object->fetch
 include DOL_DOCUMENT_ROOT.'/core/actions_fetchobject.inc.php'; // Must be 'include', not 'include_once'
+
+// Restore $origin and $origin_id from the loaded object when the request only carried the
+// reception id (e.g. the line edit form on an existing reception posts action=updateline
+// and id=N but no origin field). Without this, the action handler below sees $origin
+// empty and silently skips both its standalone and its origin branches, so updates to
+// quantity, comment, batch and extrafields on an existing line are not persisted
+// (see issue #38386, regression from PR #36134).
+// The restore is gated on $object->origin_id > 0 so standalone receptions, which have
+// no upstream origin, are not affected: $origin stays empty and the standalone branch
+// of the updateline handler is still selected.
+if ($object->origin_id > 0) {
+	if (empty($origin)) {
+		if (!empty($object->origin_type)) {
+			$origin = $object->origin_type;
+		} elseif (is_string($object->origin) && $object->origin !== '') {
+			$origin = (string) $object->origin;
+		}
+	}
+	if (empty($origin_id)) {
+		$origin_id = $object->origin_id;
+	}
+}
 
 // Initialize a technical object to manage hooks of page. Note that conf->hooks_modules contains an array of hook context
 $hookmanager->initHooks(array('receptioncard', 'globalcard'));
@@ -393,13 +415,12 @@ if (empty($reshook)) {
 				$object->origin_type = 'order_supplier';
 				$classname = 'CommandeFournisseur';
 			} else {
-				$classname = ucfirst($object->origin);
+				$classname = ucfirst($object->origin_type);
 			}
 			$objectsrc = new $classname($db);
 			$objectsrc->fetch($object->origin_id);
 
 			$object->socid = $objectsrc->socid;
-			$object->fk_delivery_address = $objectsrc->fk_delivery_address;
 
 			$product = new Product($db);
 			$batch_line = array();
@@ -596,7 +617,7 @@ if (empty($reshook)) {
 
 		// TODO add alternative status
 		/*} elseif ($action == 'reopen' && ($user->hasRights('reception', 'creer') || $user->hasRights('reception', 'reception_advance', 'validate'))) {
-			$result = $object->setStatut(0);
+			$result = $object->setStatut(Reception::STATUS_DRAFT);
 			if ($result < 0) {
 				setEventMessages($object->error, $object->errors, 'errors');
 		}*/
@@ -695,7 +716,7 @@ if (empty($reshook)) {
 			$newlang = GETPOST('lang_id', 'aZ09');
 		}
 		if (getDolGlobalInt('MAIN_MULTILANGS') && empty($newlang)) {
-			$newlang = $reception->thirdparty->default_lang;
+			$newlang = $object->thirdparty->default_lang;
 		}
 		if (!empty($newlang)) {
 			$outputlangs = new Translate("", $conf);
@@ -712,7 +733,7 @@ if (empty($reshook)) {
 
 		$upload_dir = $conf->reception->dir_output;
 		$file = $upload_dir.'/'.GETPOST('file');
-		$ret = dol_delete_file($file, 0, 0, 0, $object);
+		$ret = dol_delete_file($file, 1, 0, 0, $object);
 		if ($ret) {
 			setEventMessages($langs->trans("FileWasRemoved", GETPOST('urlfile')), null, 'mesgs');
 		} else {
@@ -904,6 +925,12 @@ if (empty($reshook)) {
 					$ret = $object->fetch($object->id); // Reload to get new records
 					$object->generateDocument($object->model_pdf, $outputlangs, $hidedetails, $hidedesc, $hideref);
 				}
+
+				// Redirect after the successful save so the page leaves edit mode and the
+				// updated values are read back from DB, matching the cancel path below
+				// and the header-data save handlers (see issue #38386).
+				header('Location: '.$_SERVER['PHP_SELF'].'?id='.$object->id);
+				exit();
 			} else {
 				header('Location: '.$_SERVER['PHP_SELF'].'?id='.$object->id); // To reshow the record we edit
 				exit();
@@ -1278,9 +1305,8 @@ if ($action == 'create' && $permissiontoadd) {
 		// Here $object can be of an object Reception
 		$extrafields->fetch_name_optionals_label($object->table_element);
 		if (empty($reshook) && !empty($extrafields->attributes[$object->table_element]['label'])) {
-			// copy from order
-			if ($objectsrc->fetch_optionals() > 0) {
-				$recept->array_options = array_merge($recept->array_options, $objectsrc->array_options);
+			if ($object->fetch_optionals() > 0) {
+				$recept->array_options = array_merge($recept->array_options, $object->array_options);
 			}
 			print $recept->showOptionals($extrafields, 'create', $parameters);
 		}
@@ -1296,16 +1322,18 @@ if ($action == 'create' && $permissiontoadd) {
 		}
 
 		// Template to use by default
-		print '<tr><td>'.$langs->trans('Model').'</td>';
-		print '<td colspan="2">';
-		print img_picto('', 'pdf', 'class="pictofixedwidth"');
-		include_once DOL_DOCUMENT_ROOT.'/core/modules/reception/modules_reception.php';
 		$list = ModelePdfReception::liste_modeles($db);
-		print $form->selectarray('model', $list, getDolGlobalString('RECEPTION_ADDON_PDF'), 0, 0, 0, '', 0, 0, 0, '', 'maxwidth200 widthcentpercentminusx', 1);
-		print "</td></tr>";
+		if (is_countable($list) && count($list) > 0) {
+			print '<tr><td>'.$langs->trans('Model').'</td>';
+			print '<td colspan="2">';
+			print img_picto('', 'pdf', 'class="pictofixedwidth"');
+			include_once DOL_DOCUMENT_ROOT.'/core/modules/reception/modules_reception.php';
+			print $form->selectarray('model', $list, getDolGlobalString('RECEPTION_ADDON_PDF'), 0, 0, 0, '', 0, 0, 0, '', 'maxwidth200 widthcentpercentminusx', 1);
+			print "</td></tr>";
+		}
 
 		// Note Public
-		$htmltext ='';
+		$htmltext = '';
 		print '<tr>';
 		print '<td class="tdtop">';
 		print $form->textwithpicto($langs->trans('NotePublic'), $htmltext);
@@ -1606,8 +1634,41 @@ if ($action == 'create' && $permissiontoadd) {
 				$dispatchLines[$n]['array_options'] = $extrafields->getOptionalsFromPost('receptiondet_batch', '_' . $suffix, '');
 			}
 
+			$reshook = $hookmanager->executeHooks('dataProcessing', $parameters, $object, $action); // Note that $action and $object may have been modified by some hooks
+			if ($reshook < 0) {
+				setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+			} elseif (empty($reshook)) {
+				// Only merge if resArray is a valid, non-empty array
+				if (is_array($hookmanager->resArray) && !empty($hookmanager->resArray)) {
+					// Check if the merge would overwrite valid data with NULL
+					$tempMerged = array_merge($dispatchLines, $hookmanager->resArray);
+
+					// Sanity check: ensure our existing keys are still valid arrays
+					$corrupted = false;
+					foreach ($dispatchLines as $idx => $val) {
+						if (!is_array($tempMerged[$idx]) || !isset($tempMerged[$idx]['fk_commandefourndet'])) {
+							$corrupted = true;
+							break;
+						}
+					}
+
+					if (!$corrupted) {
+						$dispatchLines = $tempMerged;
+					} else {
+						// If merge corrupted data, ignore the hook result and keep original
+						error_log("WARNING: Hook dataProcessing returned invalid data, ignoring merge.");
+					}
+				}
+			} elseif ($reshook > 0) {
+				// $resArray starts from [0], we need $dispatchLines to start from [1], so we shift it
+				$dispatchLines = $hookmanager->resArray;
+				array_unshift($dispatchLines, null);
+				unset($dispatchLines[0]);
+				$numAsked = count($dispatchLines);
+			}
+
 			print '<script type="text/javascript">
-            jQuery(document).ready(function() {
+			jQuery(document).ready(function() {
 	            jQuery("#autofill").click(function(event) {
 					event.preventDefault();';
 			$i = 1;
@@ -1624,8 +1685,8 @@ if ($action == 'create' && $permissiontoadd) {
 				$i++;
 			}
 			print '});
-        	});
-            </script>';
+			});
+			</script>';
 
 			print '<br>';
 
@@ -1660,6 +1721,14 @@ if ($action == 'create' && $permissiontoadd) {
 					if (!getDolGlobalInt('PRODUCT_DISABLE_EATBY')) {
 						print '<td class="left">'.$langs->trans("EatByDate").'</td>';
 					}
+				}
+
+				$parameters = array();
+				$reshook = $hookmanager->executeHooks('printFieldListTitle', $parameters, $object, $action); // Note that $action and $object may have been modified by some hooks
+				if ($reshook < 0) {
+					setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+				} else {
+					print $hookmanager->resPrint;
 				}
 				print "</tr>\n";
 			}
@@ -1706,7 +1775,7 @@ if ($action == 'create' && $permissiontoadd) {
 					//var_dump($dispatchLines[$indiceAsked]);
 
 					print '<td>';
-					print '<a name="'.$line->id.'"></a>'; // ancre pour retourner sur la ligne
+					print '<a name="'.$line->id.'"></a>'; // Anchor to return to the line
 
 					print '<input type="hidden" name="productl'.$indiceAsked.'" value="'.$line->fk_product.'">';
 
@@ -1851,6 +1920,16 @@ if ($action == 'create' && $permissiontoadd) {
 						} else {
 							print '<td colspan="3"></td>';
 						}
+					}
+
+					$parameters = array();
+					$parameters['dispatchLine'] = $dispatchLines[$indiceAsked];
+					$parameters['indiceAsked'] = $indiceAsked;
+					$reshook = $hookmanager->executeHooks('printFieldListValue', $parameters, $object, $action); // Note that $action and $object may have been modified by some hooks
+					if ($reshook < 0) {
+						setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+					} else {
+						print $hookmanager->resPrint;
 					}
 				}
 
@@ -2425,6 +2504,14 @@ if ($action == 'create' && $permissiontoadd) {
 				print $langs->trans("Batch");
 			}
 			print '</td>';
+
+			$parameters = array();
+			$reshook = $hookmanager->executeHooks('printFieldListTitle', $parameters, $object, $action); // Note that $action and $object may have been modified by some hooks
+			if ($reshook < 0) {
+				setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+			} else {
+				print $hookmanager->resPrint;
+			}
 		} else {
 			$statusreceived = $object::STATUS_CLOSED;
 			if (getDolGlobalInt("STOCK_CALCULATE_ON_RECEPTION")) {
@@ -2444,6 +2531,14 @@ if ($action == 'create' && $permissiontoadd) {
 
 			if (isModEnabled('productbatch')) {
 				print '<td class="left">'.$langs->trans("Batch").'</td>';
+			}
+
+			$parameters = array();
+			$reshook = $hookmanager->executeHooks('printFieldListTitle', $parameters, $object, $action); // Note that $action and $object may have been modified by some hooks
+			if ($reshook < 0) {
+				setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+			} else {
+				print $hookmanager->resPrint;
 			}
 		}
 		print '<td class="center">'.$langs->trans("CalculatedWeight").'</td>';
@@ -2477,7 +2572,7 @@ if ($action == 'create' && $permissiontoadd) {
 		// Get list of products already sent for same source object into $alreadysent
 		$alreadysent = array();
 
-		if (empty($origin)) {
+		if (empty($origin) || $origin == 'order_supplier') {
 			$origin = 'supplier_order';
 		}
 
@@ -2489,7 +2584,7 @@ if ($action == 'create' && $permissiontoadd) {
 			$sql .= ', p.description as product_desc';
 			$sql .= " FROM ".MAIN_DB_PREFIX."receptiondet_batch as ed";
 			$sql .= ", ".MAIN_DB_PREFIX."reception as e";
-			$sql .= ", ".MAIN_DB_PREFIX.(($origin == 'supplier_order') ? 'commande_fournisseur' : $origin)."det as obj";
+			$sql .= ", ".MAIN_DB_PREFIX.(($origin == 'supplier_order') ? 'commande_fournisseur' : $origin)."det as obj";  // @phan-suppress-current-line SqlInjection
 			$sql .= " LEFT JOIN ".MAIN_DB_PREFIX."product as p ON obj.fk_product = p.rowid";
 			$sql .= " WHERE e.entity IN (".getEntity('reception').")";
 			$sql .= " AND obj.fk_commande = ".((int) $origin_id);
@@ -2544,11 +2639,11 @@ if ($action == 'create' && $permissiontoadd) {
 				if (!array_key_exists($lines[$i]->fk_commandefourndet, $arrayofpurchaselinealreadyoutput)) {
 					$text = $lines[$i]->product->getNomUrl(1);
 					$text .= ' - '.$label;
-					$description = (getDolGlobalInt('PRODUIT_DESC_IN_FORM_ACCORDING_TO_DEVICE') ? '' : dol_htmlentitiesbr($lines[$i]->product->description));
+					$description = (getDolGlobalInt('PRODUIT_DESC_IN_FORM_ACCORDING_TO_DEVICE') ? '' : dol_htmlentitiesbr($lines[$i]->description));
 					print $form->textwithtooltip($text, $description, 3, 0, '', (string) $i);
 					print_date_range(!empty($lines[$i]->date_start) ? $lines[$i]->date_start : 0, !empty($lines[$i]->date_end) ? $lines[$i]->date_end : 0);
 					if (getDolGlobalInt('PRODUIT_DESC_IN_FORM_ACCORDING_TO_DEVICE')) {
-						print (!empty($lines[$i]->product->description) && $lines[$i]->description != $lines[$i]->product->description) ? '<br>'.dol_htmlentitiesbr($lines[$i]->description) : '';
+						print (!empty($lines[$i]->description) && $lines[$i]->description != $label) ? '<br>'.dol_htmlentitiesbr($lines[$i]->description) : '';
 					}
 				}
 				print "</td>\n";
@@ -2666,6 +2761,15 @@ if ($action == 'create' && $permissiontoadd) {
 					}
 				}
 				print '</table></td>';
+
+				$parameters = array();
+				$parameters['line'] = $lines[$i];
+				$reshook = $hookmanager->executeHooks('printFieldListValue', $parameters, $object, $action); // Note that $action and $object may have been modified by some hooks
+				if ($reshook < 0) {
+					setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+				} else {
+					print $hookmanager->resPrint;
+				}
 			} else {
 				// Qty to receive or received
 				print '<td class="center linecolqtytoreceive">'.$lines[$i]->qty.'</td>';
@@ -2713,6 +2817,15 @@ if ($action == 'create' && $permissiontoadd) {
 						print '<td></td>';
 					}
 				}
+
+				$parameters = array();
+				$parameters['line'] = $lines[$i];
+				$reshook = $hookmanager->executeHooks('printFieldListValue', $parameters, $object, $action); // Note that $action and $object may have been modified by some hooks
+				if ($reshook < 0) {
+					setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+				} else {
+					print $hookmanager->resPrint;
+				}
 			}
 
 			// Weight
@@ -2758,6 +2871,13 @@ if ($action == 'create' && $permissiontoadd) {
 			print "</tr>";
 
 			$arrayofpurchaselinealreadyoutput[$lines[$i]->fk_commandefourndet] = $lines[$i]->fk_commandefourndet;
+
+			$reshook = $hookmanager->executeHooks('formObjectOptions', $parameters, $object, $action); // Note that $action and $object may have been modified by some hooks
+			if ($reshook < 0) {
+				setEventMessages($hookmanager->error, $hookmanager->errors, 'errors');
+			} else {
+				print $hookmanager->resPrint;
+			}
 
 			// Display lines extrafields
 			$extralabelslines = $extrafields->attributes[$lines[$i]->table_element];
@@ -2871,7 +2991,7 @@ if ($action == 'create' && $permissiontoadd) {
 	if ($action != 'presend' && $action != 'editline') {
 		print '<div class="fichecenter"><div class="fichehalfleft">';
 
-		$objectref = dol_sanitizeFileName($object->ref);
+		$objectref = dol_sanitizeFileName((string) $object->ref);
 		$filedir = $conf->reception->dir_output."/".$objectref;
 
 		$urlsource = $_SERVER["PHP_SELF"]."?id=".$object->id;
