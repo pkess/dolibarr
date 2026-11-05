@@ -323,7 +323,9 @@ $arrayfields = array(
 	'f.dispute_status' => array('label' => "DisputeStatus", 'checked' => '-1', 'position' => 999),
 	'f.fk_statut' => array('label' => "Status", 'checked' => '1', 'position' => 1000),
 );
-
+if ($user->socid) {
+	unset($arrayfields['f.note_private']);
+}
 if (getDolGlobalString("INVOICE_USE_SITUATION") && getDolGlobalString('INVOICE_USE_RETAINED_WARRANTY')) {
 	$arrayfields['f.retained_warranty'] = array('label' => $langs->trans("RetainedWarranty"), 'checked' => '0', 'position' => 86);
 }
@@ -549,7 +551,7 @@ if ($action == 'makepayment_confirm' && $user->hasRight('facture', 'paiement')) 
 						$parameters = array('remaintopay' => $remaintopay);
 						$reshook = $hookmanager->executeHooks('finalizeAmountOfInvoice', $parameters, $facture, $action); // Note that $action and $object may have been modified by some hooks
 						if ($reshook > 0) {
-							if (!empty($remain = $hookmanager->resArray['remaintopay'])) {
+							if (!empty($remain = (float) $hookmanager->resArray['remaintopay'])) {
 								$remaintopay = $remain;
 							}
 						} elseif ($reshook < 0) {
@@ -569,7 +571,7 @@ if ($action == 'makepayment_confirm' && $user->hasRight('facture', 'paiement')) 
 								$paiement = new Paiement($db);
 								$paiement->datepaye = $paiementdate;
 								$paiement->amounts[$facture->id] = $remaintopay; // Array with all payments dispatching with invoice id
-								$paiement->multicurrency_amounts[$facture->id] = $multicurrency_remaintopay;
+								$paiement->multicurrency_amounts[$facture->id] = (float) $multicurrency_remaintopay;
 								$paiement->paiementid = $paiementid;
 								$paiement->note_private = $note_private;
 								$paiement_id = $paiement->create($user, 1, $facture->thirdparty);
@@ -2376,7 +2378,7 @@ if ($num > 0) {
 		$remaintopay = price2num($facturestatic->total_ttc - $totalallpayments);
 
 		$multicurrency_totalpay = $multicurrency_paiement + $multicurrency_totalcreditnotes + $multicurrency_totaldeposits;
-		$multicurrency_remaintopay = price2num($facturestatic->multicurrency_total_ttc - $multicurrency_totalpay);
+		$multicurrency_remaintopay = (float) price2num($facturestatic->multicurrency_total_ttc - $multicurrency_totalpay);
 
 		if ($facturestatic->status == Facture::STATUS_CLOSED) {
 			$remaintopay = 0;
@@ -2388,7 +2390,7 @@ if ($num > 0) {
 			$totalallpayments = price2num($facturestatic->total_ttc - $remaintopay);
 			$multicurrency_remaincreditnote = $discount->getAvailableDiscounts($companystatic, null, 'rc.fk_facture_source='.$facturestatic->id, 0, 0, 1);
 			$multicurrency_remaintopay = -$multicurrency_remaincreditnote;
-			$multicurrency_totalpay = price2num($facturestatic->multicurrency_total_ttc - $multicurrency_remaintopay);
+			$multicurrency_totalpay = (float) price2num($facturestatic->multicurrency_total_ttc - $multicurrency_remaintopay);
 		}
 
 		$facturestatic->alreadypaid = $paiement;
@@ -2948,7 +2950,7 @@ if ($num > 0) {
 			// Currency rate
 			if (!empty($arrayfields['f.multicurrency_tx']['checked'])) {
 				print '<td class="nowraponall">';
-				$form->form_multicurrency_rate($_SERVER['PHP_SELF'].'?id='.$obj->rowid, $obj->multicurrency_tx, 'none', $obj->multicurrency_code);
+				$form->form_multicurrency_rate($_SERVER['PHP_SELF'].'?id='.$obj->id, $obj->multicurrency_tx, 'none', $obj->multicurrency_code);
 				print "</td>\n";
 				if (!$i) {
 					$totalarray['nbfield']++;

@@ -441,7 +441,7 @@ if (empty($reshook)) {
 												$outputlangs = new Translate("", $conf);
 												$outputlangs->setDefaultLang($newlang);
 											}
-											$label = (!empty($prod->multilangs[$outputlangs->defaultlang]["libelle"])) ? $prod->multilangs[$outputlangs->defaultlang]["libelle"] : $lines[$i]->product_label;
+											$label = (!empty($prod->multilangs[$outputlangs->defaultlang]["label"])) ? $prod->multilangs[$outputlangs->defaultlang]["label"] : $lines[$i]->product_label;
 										} else {
 											$prod->fetch($lines[$i]->fk_product);
 											$label = $lines[$i]->product_label;
@@ -449,6 +449,12 @@ if (empty($reshook)) {
 
 										if ($prod->duration_value && getDolGlobalString('FICHINTER_USE_SERVICE_DURATION')) {
 											switch ($prod->duration_unit) {
+												case 's':
+													$mult = 1;
+													break;
+												case 'mn':
+													$mult = 60;
+													break;
 												default:
 												case 'h':
 													$mult = 3600;
@@ -466,7 +472,7 @@ if (empty($reshook)) {
 													$mult = 3600 * 24 * 365;
 													break;
 											}
-											$duration = (int) $prod->duration_value * $mult * $lines[$i]->qty;
+											$duration = (int) round(((float) $prod->duration_value) * $mult * $lines[$i]->qty);
 										}
 
 										$desc = $lines[$i]->product_ref;
@@ -477,10 +483,16 @@ if (empty($reshook)) {
 									// Common part (predefined or free line)
 									$desc .= dol_htmlentitiesbr($lines[$i]->desc);
 									$desc .= '<br>';
-									$desc .= ' ('.$langs->trans('Quantity').': '.$lines[$i]->qty.')';
+									$unit_label = '';
+									if ($lines[$i]->fk_unit) {
+										$langs->load('measuring_units');
+										$unit_label = $langs->trans($lines[$i]->getLabelOfUnit('short'));
+									}
+									$desc .= ' ('.$langs->trans('Quantity').': '.$lines[$i]->qty.($unit_label ? ' '.$unit_label : '').')';
 
-									$timearray = dol_getdate(dol_now());
-									$date_intervention = dol_mktime(0, 0, 0, $timearray['mon'], $timearray['mday'], $timearray['year']);
+									$source_date = (!empty($srcobject->delivery_date) ? $srcobject->delivery_date : dol_now());
+									$timearray = dol_getdate($source_date);
+									$date_intervention = dol_mktime($timearray['hours'], $timearray['minutes'], 0, $timearray['mon'], $timearray['mday'], $timearray['year']);
 
 									if ($product_type == Product::TYPE_PRODUCT) {
 										$duration = 0;
@@ -1598,7 +1610,7 @@ if ($action == 'create') {
 
 		// Intervention lines
 		$sql = 'SELECT ft.rowid, ft.description, ft.fk_fichinter, ft.duree, ft.rang,';
-		$sql .= ' ft.special_code, ft.product_type,';
+		$sql .= ' ft.special_code, ft.product_type, ft.extraparams,';
 		$sql .= ' ft.date as date_intervention';
 		$sql .= ' FROM '.MAIN_DB_PREFIX.'fichinterdet as ft';
 		$sql .= ' WHERE ft.fk_fichinter = '.((int) $object->id);
@@ -1642,8 +1654,8 @@ if ($action == 'create') {
 					}
 					if (!empty($objp->special_code) || $objp->product_type == 9) {
 						$line_color = $object->getSubtotalColors($objp->duree);
-						$line_options = json_decode($objp->extraparams, true);
-						$line_options = is_array($line_options) ? $line_options['subtotal'] : array();
+						$line_options = !empty($objp->extraparams) ? (array) json_decode($objp->extraparams, true) : array();
+						$line_options = $line_options['subtotal'] ?? array();
 						print '<td colspan="3" ><strong>'.dol_htmlentitiesbr($objp->description).'</strong>';
 						if (array_key_exists('titleshowuponpdf', $line_options)) {
 							echo '&nbsp;' . img_picto($langs->trans("ShowUPOnPDF"), 'invoicing');

@@ -1647,6 +1647,7 @@ if (!$error && $action == 'confirm_edit_value_extrafields' && $confirm == 'yes' 
 			$ret = $e->setOptionalsFromPost(null, $objecttmp, $extrafieldKeyToUpdate);
 			if ($ret > 0) {
 				$objecttmp->insertExtraFields();
+				$nbok++;
 			} else {
 				$error++;
 				setEventMessages($objecttmp->error, $objecttmp->errors, 'errors');
@@ -1660,9 +1661,9 @@ if (!$error && $action == 'confirm_edit_value_extrafields' && $confirm == 'yes' 
 
 	if (!$error) {
 		if ($nbok > 1) {
-			setEventMessages($langs->trans("RecordsDisabled", $nbok), null, 'mesgs');
-		} else {
-			setEventMessages($langs->trans("save"), null, 'mesgs');
+			setEventMessages($langs->trans("RecordsModified", $nbok), null, 'mesgs');
+		} elseif ($nbok == 1) {
+			setEventMessages($langs->trans("RecordModifiedSuccessfully"), null, 'mesgs');
 		}
 		$db->commit();
 	} else {
@@ -1779,6 +1780,8 @@ if (!$error && ($massaction == 'approveleave' || ($action == 'approveleave' && $
 				if ($verif <= 0) {
 					setEventMessages($objecttmp->error, $objecttmp->errors, 'errors');
 					$error++;
+				} else {
+					$nbok++;
 				}
 
 				// If no SQL error, we redirect to the request form
@@ -1960,8 +1963,28 @@ if (!$error && ($massaction == 'clonetasks' || ($action == 'clonetasks' && $conf
 	if ($permisstiontoadd) {
 		$taskidsmapping = array();		// old task id => new cloned task id
 		$clonedtaskoldparent = array();	// new cloned task id => old parent task id
+
+		// Build the list of projects the current user is allowed to read, used to authorize
+		// every source task against its actual project before cloning it (the previous fix for
+		// CVE-2026-77923 only validated the destination project).
+		$authorizedsourceprojects = null;
+		if (!$user->hasRight('projet', 'all', 'lire')) {
+			$sourceprojectstatic = new Project($db);
+			$tmps = $sourceprojectstatic->getProjectsAuthorizedForUser($user, 0, 1, 0);
+			$authorizedsourceprojects = explode(',', $tmps);
+		}
+
 		foreach (GETPOST('selected') as $task) {
-			$origin_task->fetch($task, '', 0);
+			if ($origin_task->fetch($task, '', 0) <= 0) {
+				continue;	// Source task not found, skip it
+			}
+
+			// Authorize the source task against its actual project before cloning it
+			if (is_array($authorizedsourceprojects) && !in_array($origin_task->fk_project, $authorizedsourceprojects)) {
+				setEventMessages($langs->trans('NotEnoughPermissions'), null, 'errors');
+				$error++;
+				break;
+			}
 
 			$defaultref = '';
 			$classnamemodtask = getDolGlobalString('PROJECT_TASK_ADDON', 'mod_task_simple');

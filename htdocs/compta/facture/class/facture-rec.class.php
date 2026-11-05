@@ -1193,6 +1193,11 @@ class FactureRec extends CommonInvoice
 	{
 		global $mysoc;
 
+		if (!$this->isLineOfObject($rowid)) {
+			$this->error = 'ErrorLineIDDoesNotMatchWithObjectID';
+			return -1;
+		}
+
 		$facid = $this->id;
 
 		dol_syslog(get_class($this)."::updateline facid=".$facid." rowid=$rowid, desc=$desc, pu_ht=$pu_ht, qty=$qty, txtva=$txtva, txlocaltax1=$txlocaltax1, txlocaltax2=$txlocaltax2, fk_product=$fk_product, remise_percent=$remise_percent, info_bits=$info_bits, fk_remise_except=$fk_remise_except, price_base_type=$price_base_type, pu_ttc=$pu_ttc, type=$type, fk_unit=$fk_unit, pu_ht_devise=$pu_ht_devise", LOG_DEBUG);
@@ -1398,8 +1403,9 @@ class FactureRec extends CommonInvoice
 			return dol_mktime($originalHour, $originalMin, $originalSec, $targetMonth, $targetDay, $targetYear);
 		}
 
-		// For yearly frequency or days < 28, use standard calculation
-		return dol_time_plus_duree($this->date_when, $this->frequency, $this->unit_frequency);
+		// For yearly frequency or days < 28, use standard calculation.
+		// date_when is read from database in the timezone of the server (jdate), so the delay must be added in this timezone
+		return dol_time_plus_duree($this->date_when, $this->frequency, $this->unit_frequency, 0, 'tzserver');
 	}
 
 	/**
@@ -1450,8 +1456,9 @@ class FactureRec extends CommonInvoice
 		$langs->loadLangs(array("main", "bills"));
 
 		$now = dol_now();
-		$tmparray = dol_getdate($now);
-		$today = dol_mktime(23, 59, 59, $tmparray['mon'], $tmparray['mday'], $tmparray['year']); // Today is last second of current day
+		// Creation can be done from UI or from cron, so we must share a common hour, so we use server timezone to get the day, month and year.
+		$tmparray = dol_getdate($now, false, 'tzserver');
+		$endofdaytzserver = dol_mktime(23, 59, 59, $tmparray['mon'], $tmparray['mday'], $tmparray['year'], 'tzserver'); // If we print date UTC in string, we got: 'year-mon-mday 22:59:59' if TZ+1
 
 		$this->output = '';
 
@@ -1459,7 +1466,7 @@ class FactureRec extends CommonInvoice
 
 		$sql = 'SELECT rowid FROM '.MAIN_DB_PREFIX.'facture_rec';
 		$sql .= ' WHERE frequency > 0'; // A recurring invoice is an invoice with a frequency
-		$sql .= " AND (date_when IS NULL OR date_when <= '".$this->db->idate($today)."')";
+		$sql .= " AND (date_when IS NULL OR date_when <= '".$this->db->idate($endofdaytzserver)."')";	// we got 'year-mon-mday 23:59:59' because idate convert into TZ server
 		$sql .= ' AND (nb_gen_done < nb_gen_max OR nb_gen_max = 0)';
 		$sql .= ' AND suspended = 0';
 		$sql .= ' AND entity = '.((int) $conf->entity); // MUST STAY = $conf->entity here
@@ -1794,7 +1801,8 @@ class FactureRec extends CommonInvoice
 						$this->output .= $langs->trans("InvoiceSentFromTemplate", $facture->ref, $facturerec->ref)."\n";
 					}
 				} else {
-					$this->output .= $langs->trans("InvoiceGeneratedFromTemplateError", $facture->ref, $facturerec->ref, $this->error)."\n";
+					// $facture is still null when $facturerec->fetch() failed above
+					$this->output .= $langs->trans("InvoiceGeneratedFromTemplateError", (is_object($facture) ? $facture->ref : ''), $facturerec->ref, $this->error)."\n";
 					$this->db->rollback("createRecurringInvoices Process invoice template id=".$facturerec->id.", ref=".$facturerec->ref);
 				}
 

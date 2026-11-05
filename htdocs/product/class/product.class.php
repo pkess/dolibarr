@@ -2378,7 +2378,7 @@ class Product extends CommonObject
 
 	// phpcs:disable PEAR.NamingConventions.ValidFunctionName.ScopeNotCamelCaps
 	/**
-	 *  Delete a price line
+	 *  Delete a price line of this product
 	 *
 	 * @param  User	$user	Object user
 	 * @param  int	$rowid	Line id to delete
@@ -2389,6 +2389,7 @@ class Product extends CommonObject
 		// phpcs:enable
 		$sql = "DELETE FROM ".$this->db->prefix()."product_price_by_qty";
 		$sql .= " WHERE fk_product_price = ".((int) $rowid);
+		$sql .= " AND fk_product_price IN (SELECT pp.rowid FROM ".$this->db->prefix()."product_price as pp WHERE pp.fk_product = ".((int) $this->id).")";
 		$resql = $this->db->query($sql);
 
 		$sql = "DELETE FROM ".$this->db->prefix()."product_price_extrafields";
@@ -2397,6 +2398,7 @@ class Product extends CommonObject
 
 		$sql = "DELETE FROM ".$this->db->prefix()."product_price";
 		$sql .= " WHERE rowid = ".((int) $rowid);
+		$sql .= " AND fk_product = ".((int) $this->id);
 		$resql = $this->db->query($sql);
 		if ($resql) {
 			return 1;
@@ -2617,7 +2619,27 @@ class Product extends CommonObject
 			}
 		} elseif (getDolGlobalString('PRODUIT_CUSTOMER_PRICES_BY_QTY_MULTIPRICES')) {
 			// If price per quantity and customer
-			if (!empty($this->prices_by_qty[$thirdparty_buyer->price_level])) {
+			if (!empty($thirdparty_buyer->price_level)) {
+				// The price of the level of the customer is the price to use when no price per quantity is selected
+				$pu_ht = isset($this->multiprices[$thirdparty_buyer->price_level]) ? $this->multiprices[$thirdparty_buyer->price_level] : 0;
+				$pu_ttc = isset($this->multiprices_ttc[$thirdparty_buyer->price_level]) ? $this->multiprices_ttc[$thirdparty_buyer->price_level] : 0;
+				$price_min = isset($this->multiprices_min[$thirdparty_buyer->price_level]) ? $this->multiprices_min[$thirdparty_buyer->price_level] : 0;
+				$price_min_ttc = isset($this->multiprices_min_ttc[$thirdparty_buyer->price_level]) ? $this->multiprices_min_ttc[$thirdparty_buyer->price_level] : 0;
+				$price_base_type = empty($this->multiprices_base_type[$thirdparty_buyer->price_level]) ? 'HT' : $this->multiprices_base_type[$thirdparty_buyer->price_level];
+				if (getDolGlobalString('PRODUIT_MULTIPRICES_USE_VAT_PER_LEVEL')) {
+					// using this option is a bug. kept for backward compatibility
+					if (isset($this->multiprices_tva_tx[$thirdparty_buyer->price_level])) {
+						$tva_tx = $this->multiprices_tva_tx[$thirdparty_buyer->price_level];
+					}
+					if (isset($this->multiprices_recuperableonly[$thirdparty_buyer->price_level])) {
+						$tva_npr = $this->multiprices_recuperableonly[$thirdparty_buyer->price_level];
+					}
+					if (empty($tva_tx)) {
+						$tva_npr = 0;
+					}
+				}
+			}
+			if (!empty($thirdparty_buyer->price_level) && !empty($this->prices_by_qty[$thirdparty_buyer->price_level])) {
 				// yes, this product has some prices per quantity
 				// Search price into product_price_by_qty from $this->id
 				foreach ($this->prices_by_qty_list[$thirdparty_buyer->price_level] as $priceforthequantityarray) {
@@ -2635,7 +2657,10 @@ class Product extends CommonObject
 			}
 		}
 
-		return array('pu_ht' => $pu_ht, 'pu_ttc' => $pu_ttc, 'price_min' => $price_min, 'price_min_ttc' => $price_min_ttc, 'price_base_type' => $price_base_type, 'tva_tx' => $tva_tx, 'tva_npr' => $tva_npr);
+		$localtax1 = get_localtax((string) $tva_tx, 1, $thirdparty_buyer, $thirdparty_seller, $tva_npr);
+		$localtax2 = get_localtax((string) $tva_tx, 2, $thirdparty_buyer, $thirdparty_seller, $tva_npr);
+
+		return array('pu_ht' => $pu_ht, 'pu_ttc' => $pu_ttc, 'price_min' => $price_min, 'price_min_ttc' => $price_min_ttc, 'price_base_type' => $price_base_type, 'tva_tx' => $tva_tx, 'tva_npr' => $tva_npr, 'localtax1' => $localtax1, 'localtax2' => $localtax2);
 	}
 
 	// phpcs:disable PEAR.NamingConventions.ValidFunctionName.ScopeNotCamelCaps
@@ -7425,7 +7450,10 @@ class Product extends CommonObject
 		} elseif ($this->duration_unit == 'y') {
 			$prodDurationHours = 24. * 365;
 		} else {
-			$prodDurationHours = 0.0;
+			// Unknown unit: the duration cannot be converted. Returning 0 silently made callers
+			// compute a zero duration, and time.php divides by this value (#40805).
+			$this->errors[] = 'ErrorDurationForServiceNotDefinedCantCalculateHourlyPrice';
+			return -1;
 		}
 		$prodDurationHours *= $this->duration_value;
 
